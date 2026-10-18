@@ -15,6 +15,7 @@ description: 三层记忆的写作细则。当需要写或更新 docs/memory/con
 | 撰写 `docs/memory/handoff.md`（会话收尾必写） | `references/memory-writing.md` 下半 |
 | 创建 `docs/decisions/YYYY-MM-DD-标题.md` | `references/decision-writing.md` |
 | 修订既有决策（追记 / 另建新条）/ 维护索引 | `references/decision-writing.md` |
+| 会话产出重要分析（比较/调研/根因）需落库 | `references/decision-writing.md` 探索性分析路由节 |
 
 ## 工作流程
 

@@ -52,7 +52,7 @@
 
 ```text
 docs/
-├── design/      # 设计文档：架构设计、模块设计、接口设计
+├── design/      # 设计文档：架构/模块/接口设计与探索性分析（调研/比较/根因）
 ├── decisions/   # 决策记录：每个技术决策的理由与替代方案（索引 README.md）
 ├── progress/    # 执行文档：任务进度、里程碑状态
 ├── memory/      # 记忆文件：context.md、handoff.md

@@ -8,3 +8,4 @@
 - 2026-10-17 [vibe-memory 技能与模板 §5 瘦身](2026-10-17-vibe-memory技能与5瘦身.md)｜已生效｜L2/L3 写作细则入 skill，AGENTS.md §5 留红线与指针
 - 2026-10-17 [vibe-governance 技能](2026-10-17-vibe-governance技能.md)｜已生效｜L1 维护与复盘五步入 skill，清单正本留项目内，三件套成型
 - 2026-10-17 [karpathy 方法论融入模板](2026-10-17-karpathy方法论融入模板.md)｜已生效｜四条行为规则入 AGENTS.md §3，三个元设计固化为收录铁律与 tradeoff 声明
+- 2026-10-18 [LLM Wiki 两真空位融合](2026-10-18-LLM-Wiki两真空位融合.md)｜已生效｜Query 回填路由入 vibe-memory，知识健康三查入复盘信号；index/log 不融
