@@ -7,21 +7,22 @@
 
 ## 1. 项目概述
 
-- 定位：vibe-template — 给 AI 编程 Agent 用的跨会话协作规范模板，以 vibe-init / vibe-memory / vibe-governance 三个技能交付；README.md 为理念与用法的唯一权威
-- 技术栈：Python 3 标准库（脚手架脚本，无第三方依赖）；无构建产物
-- 关键入口：skills/vibe-init/scripts/init_vibe_project.py（脚手架，幂等不覆盖已有文件，--force 显式覆盖）
+- 定位：`<一句话说明项目是什么、解决什么问题，例：dsh-canvas-poc — 画布协作 POC>`
+- 技术栈：`<仅列 Agent 读 package.json / 依赖清单看不出意图的关键决策，例：状态管理用 X 而非常见 Y>`
+- 关键入口：`<主入口文件与启动方式；与 package.json scripts 能看出的内容不要写>`；命令面大的项目建 `docs/design/cli-reference.md` 作参数与设计动机的唯一权威（新增子命令须同步），本节只留一句话定位
 
 ## 2. 命令（仅收录 Agent 猜不到的）
 
-- 构建：无（纯模板仓库，无构建产物）
-- 测试：脚手架验证 = 临时目录两遍运行 init_vibe_project.py（第一遍新建、第二遍幂等全跳过），退出码 0；模板变更后须过官方 package_skill.py 校验
-- Lint / 类型检查：无
-- 依赖 / 安全扫描：无第三方依赖
+- 构建：`<命令>`
+- 测试：`<命令，含跑单个测试的方法>`
+- Lint / 类型检查：`<命令>`
+- 依赖 / 安全扫描：`<命令，如 npm audit>`
 - 规则：提交前上述检查必须全部通过；禁止跳过验证直接宣称"已完成"，必须展示命令输出作为证据。
 
 ## 3. 代码与沟通红线（只写与默认不同、或反复出错的规则）
 
-
+- `<例：ES Module (import/export)，禁用 CommonJS require>`
+- `<例：每个新函数必须同名测试文件 xxx.test.ts，无测试的 PR 不合并>`
 - 动手前显式陈述假设；存在多种解读时全部列出而非默默择一；发现更简单方案时提出；不清楚即停下询问。
 - 沟通受控：同一概念全库与对话中用唯一名称；结论先行、一句一义；"尽快/适当/大量"类模糊量词以具体数字或明确列表替代。
 - 只写解决问题的最小代码：不加未要求的抽象、灵活性与防御性异常处理；自问"资深工程师会说这过度设计吗"，是则重写。
@@ -32,8 +33,8 @@
 
 ## 4. 安全与交付红线
 
-- 本仓库不含运行时密钥与 .env；禁止提交任何密钥、Token。
-- Ask-first 集中清单（执行前必须经人类明确确认；新增事项须登记于此，其他文档只作出处引用）：引入第三方依赖、安装系统级依赖、改 CI/部署配置、删数据、force push、脚手架 --force 覆盖已有文件。
+- 禁止提交任何密钥、Token；环境变量集中在 `<.env.example 或 docs/ 指定位置>` 登记占位符，真实 `.env` 不入 Git。
+- Ask-first 集中清单（执行前必须经人类明确确认；新增事项须登记于此，其他文档只作出处引用）：引入第三方依赖、安装系统级依赖、改 CI/部署配置、删数据、force push、`<项目特定危险事项>`。
 - 认证、密码哈希、输入校验、加密一律用成熟库，SQL 一律参数化，禁止自研安全原语。
 - AI 生成的代码未经人类评审不得合并或部署：测试全绿只证明"能跑"，不证明"对且安全"。
 
@@ -46,13 +47,14 @@
 - 写法：更新即重写而非追加；同仓并行会话先读最新、精确片段替换落地。
 - 双预算：本文件 ≤100 行且单行 ≤200 字符｜context.md ≤40 行且单行 ≤150 字符｜handoff.md ≤60 行且单行 ≤150 字符；超出先裁剪再写入。
 - 决策纪律：影响架构/技术选型/核心接口的修改立即建决策记录并同步索引；无决策记录视为未完成。
-- 写作细则（快照语义、交接分区、何时建条、追记判据、索引维护）见 vibe-memory 技能；未安装时按 `docs/memory/` 各文件头部说明与 `docs/decisions/_template.md` 执行。
+- 写作细则见 `docs/governance/memory-writing.md`（决策与索引细则在同目录 `decision-writing.md`；`docs/memory/` 与 `docs/decisions/_template.md` 的头部说明为格式速查）。
 
 ## 6. 文档体系（每类信息各就各位）
 
 ```text
 docs/
 ├── design/      # 设计文档：架构/模块/接口设计与探索性分析（调研/比较/根因）
+├── governance/  # 治理细则：memory-writing/decision-writing/l1-maintenance/governance-review（init 实例化，见 §5/§8）
 ├── decisions/   # 决策记录：每个技术决策的理由与替代方案（索引 README.md）
 ├── progress/    # 执行文档：任务进度、里程碑状态
 ├── memory/      # 记忆文件：context.md、handoff.md
@@ -82,4 +84,4 @@ docs/
 - 写入前先查重：本文件与其他文档已有的规则不得复述第二遍，新规则写入唯一对应位置。
 - 发现本文件规则过时或被反复违反：先修改本文件，再按新规则执行；修订时在 `docs/decisions/` 记录原因。
 - 本文件像代码一样治理：定期修剪，提交前自查是否新增了"Agent 读代码即可获知"的冗余内容。
-- 治理维护与复盘细则（收录判定、修订流程、复盘五步）见 vibe-governance 技能；未安装时按 `docs/design/governance-retrospective.md` 方法论执行。
+- 治理细则见 `docs/governance/l1-maintenance.md`（规则修订）与 `docs/governance/governance-review.md`（复盘）；方法论正本 `docs/design/governance-retrospective.md`。
