@@ -1,6 +1,6 @@
-# vibe-template
+# vibe-base
 
-给 AI 编程 Agent 用的协作规范，以三个技能交付。设计不是拍脑袋来的：主体来自 Karpathy 的三套公开理念，经一个真实项目五十四次决策的实战打磨后固化成型。本文先讲理念，再讲怎么落进体系，最后是使用方法。
+给 AI 编程 Agent 用的协作规范，以技能 vibe-base 交付。设计不是拍脑袋来的：主体来自 Karpathy 的三套公开理念，经一个真实项目五十四次决策的实战打磨后固化成型。本文先讲理念，再讲怎么落进体系、解决什么问题，最后是使用方法。
 
 ## 三套底层理念
 
@@ -31,13 +31,13 @@ Karpathy 观察 LLM 写代码的翻车姿势，归结成四条规则：
 
 ## 怎么落进体系
 
-三套理念没有做成第四个技能，而是按"红线常驻、细则按需"分层塞进现有结构。行为红线每次会话都生效，不赌语义触发；写作细则只在动笔时加载，不占平时上下文。
+三套理念按"红线常驻、细则直达"分层落进体系。行为红线每次会话都生效，不赌语义触发；细则不藏在技能触发链里——init 时细则随骨架实例化到项目 `docs/governance/`，AGENTS.md 的指针指向项目内的细则文件，写文档时一步到位，和技能装没装、装在哪完全无关。
 
-| 理念 | 常驻层（AGENTS.md，每次会话生效） | 细则层（技能，写作或治理时加载） |
+| 理念 | 常驻层（AGENTS.md，每次会话生效） | 细则层（项目 docs/governance/ 实例，由 AGENTS.md 指针直达） |
 | --- | --- | --- |
-| Guidelines | §3 四条行为规则 | vibe-governance 的收录铁律，三条元设计管规则演化 |
-| LLM Wiki | §6 文档目录给分析产物留了家 | vibe-memory 的回填路由；复盘信号新增知识体检 |
-| 受控文字 | §3 沟通受控一行 | decision-writing 的行文受控节 |
+| Guidelines | §3 四条行为规则 | 收录铁律，三条元设计管规则演化 |
+| LLM Wiki | §6 文档目录给分析产物留了家 | 回填路由；复盘信号新增知识体检 |
+| 受控文字 | §3 沟通受控一行 | 行文受控节 |
 
 有些东西明确不搬。LLM Wiki 的全量目录页在百来个文件的项目里是纯负担；时序日志文件和"快照是状态不是日志"的原则相抵，git log 已经管了时序。缺什么补什么，不整套照搬。
 
@@ -93,15 +93,15 @@ Agent 十分钟写了五百行，看着挺像回事。没有人类评审，合�
 
 ## 使用方法
 
-安装三个技能到用户技能目录：
+安装技能：
 
 ```bash
-mkdir -p ~/.codebuddy/skills && cp -r skills/vibe-init skills/vibe-memory skills/vibe-governance ~/.codebuddy/skills/
+mkdir -p ~/.agents/skills && cp -r skills/vibe-base ~/.agents/skills/
 ```
 
-新项目说一句「初始化项目治理」或「init AGENTS」。vibe-init 生成骨架：幂等，不覆盖已有文件；占位符不追问，Agent 在后续开发中获知实际信息后自己回填。
+新项目说一句「初始化项目治理」或「init AGENTS」。vibe-base 的初始化区生成骨架：幂等，不覆盖已有文件；占位符不追问，Agent 在后续开发中获知实际信息后自己回填。
 
-之后不需要你操心运转。Agent 写文档时 vibe-memory 的细则会介入，治理信号出现时 vibe-governance 接管，行为红线由 AGENTS.md 常驻保证——这套机制不依赖任何技能被"想起来"。
+之后不需要你操心运转，技能也只在冷启动这一刻登场。init 生成的骨架是 13 个文件：9 个治理骨架加 4 份细则（落在项目 `docs/governance/`）。写文档时 AGENTS.md 的指针直达这些细则文件，治理信号出现时走治理细则，行为红线由 AGENTS.md 常驻保证——全程不依赖任何技能被"想起来"，甚至不依赖技能还装着。
 
 ## 好处与代价
 
@@ -109,27 +109,10 @@ mkdir -p ~/.codebuddy/skills && cp -r skills/vibe-init skills/vibe-memory skills
 
 代价也说清楚：AGENTS.md 常驻 86 行（上限 100）；细则加载和自查会拖慢写作节奏；证据门槛会否决一部分"感觉对"的改进。这套体系偏向正确而不是速度，琐碎任务凭判断简化。
 
-## 仓库结构
-
-```text
-├── AGENTS.md               # 本仓库自身的协作规范（非模板）
-├── README.md               # 本文件
-├── docs/decisions/         # 本仓库自身的决策记录
-└── skills/
-    ├── vibe-init/          # 治理骨架初始化：SKILL.md + assets 模板唯一正本 + scripts 脚手架
-    ├── vibe-memory/        # L2/L3 写作细则：context/handoff/决策记录怎么写才合格
-    └── vibe-governance/    # L1 维护与治理复盘：规则怎么改、复盘怎么跑
-```
-
-## 修改纪律
-
-- 改模板 = 改 `skills/vibe-init/assets/` 下的文件；模板规则变更须先在 `docs/decisions/` 登记决策记录。
-- 提交前验证：脚手架在临时目录两遍运行（新建 + 幂等）通过，且官方 `package_skill.py` 校验通过；展示命令输出。
-- 规范细节见本仓库 `AGENTS.md`。
 
 ## 这个模板长这样，是复盘出来的
 
-模板在真实项目实战一周（54 条决策）后做了一轮治理复盘：8 个反模式（入口膨胀、压行不压量、规则相抵、决策无索引、Ask-first 散落、易腐运行态、bootstrap 膨胀、不可测触发）各有实测证据与改法，已全部固化进模板本体。证据与自查清单见 `skills/vibe-init/assets/docs/design/governance-retrospective.md`。
+模板在真实项目实战一周（54 条决策）后做了一轮治理复盘：8 个反模式（入口膨胀、压行不压量、规则相抵、决策无索引、Ask-first 散落、易腐运行态、bootstrap 膨胀、不可测触发）各有实测证据与改法，已全部固化进模板本体。证据与自查清单见 `skills/vibe-base/assets/docs/design/governance-retrospective.md`。
 
 ## 这个模板不做什么
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""vibe-init 脚手架：将治理骨架（AGENTS.md + docs/）创建到目标仓库。
+"""vibe-base 脚手架：将治理骨架（AGENTS.md + docs/）创建到目标仓库。
 
 幂等：默认不覆盖已存在的文件（--force 显式覆盖）。
 运行后扫描骨架文件（含已存在的，格式示例文件除外）中的 `<...>` 占位符并按 文件:行 报告，
@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 
 ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets"
+GOVERNANCE_PREFIX = "docs/governance/"
 
 # 这些文件本身是"格式的模板"（供未来复制使用），其占位符无需填写
 FORMAT_EXAMPLES = (
@@ -46,7 +47,7 @@ def scan_placeholders(target: Path, created):
     findings = []
     for dst in created:
         rel = dst.relative_to(target).as_posix()
-        if rel in FORMAT_EXAMPLES:
+        if rel in FORMAT_EXAMPLES or rel.startswith(GOVERNANCE_PREFIX):
             continue
         for lineno, line in enumerate(dst.read_text(encoding="utf-8").splitlines(), 1):
             for m in PLACEHOLDER_RE.finditer(line):

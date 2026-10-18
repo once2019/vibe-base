@@ -47,13 +47,14 @@
 - 写法：更新即重写而非追加；同仓并行会话先读最新、精确片段替换落地。
 - 双预算：本文件 ≤100 行且单行 ≤200 字符｜context.md ≤40 行且单行 ≤150 字符｜handoff.md ≤60 行且单行 ≤150 字符；超出先裁剪再写入。
 - 决策纪律：影响架构/技术选型/核心接口的修改立即建决策记录并同步索引；无决策记录视为未完成。
-- 写作细则（快照语义、交接分区、何时建条、追记判据、索引维护）见 vibe-memory 技能；未安装时按 `docs/memory/` 各文件头部说明与 `docs/decisions/_template.md` 执行。
+- 写作细则见 `docs/governance/memory-writing.md`（决策与索引细则在同目录 `decision-writing.md`；`docs/memory/` 与 `docs/decisions/_template.md` 的头部说明为格式速查）。
 
 ## 6. 文档体系（每类信息各就各位）
 
 ```text
 docs/
 ├── design/      # 设计文档：架构/模块/接口设计与探索性分析（调研/比较/根因）
+├── governance/  # 治理细则：memory-writing/decision-writing/l1-maintenance/governance-review（init 实例化，见 §5/§8）
 ├── decisions/   # 决策记录：每个技术决策的理由与替代方案（索引 README.md）
 ├── progress/    # 执行文档：任务进度、里程碑状态
 ├── memory/      # 记忆文件：context.md、handoff.md
@@ -83,4 +84,4 @@ docs/
 - 写入前先查重：本文件与其他文档已有的规则不得复述第二遍，新规则写入唯一对应位置。
 - 发现本文件规则过时或被反复违反：先修改本文件，再按新规则执行；修订时在 `docs/decisions/` 记录原因。
 - 本文件像代码一样治理：定期修剪，提交前自查是否新增了"Agent 读代码即可获知"的冗余内容。
-- 治理维护与复盘细则（收录判定、修订流程、复盘五步）见 vibe-governance 技能；未安装时按 `docs/design/governance-retrospective.md` 方法论执行。
+- 治理细则见 `docs/governance/l1-maintenance.md`（规则修订）与 `docs/governance/governance-review.md`（复盘）；方法论正本 `docs/design/governance-retrospective.md`。
