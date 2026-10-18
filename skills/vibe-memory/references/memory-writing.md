@@ -3,6 +3,7 @@
 > 上半 = context.md（状态快照）；下半 = handoff.md（跨会话交接）。
 > 红线与双预算见 AGENTS.md §5；本文件只写"怎么填才合格"的判断细则。
 > 出处：`docs/design/governance-retrospective.md` 反模式 #2/#3/#6/#8 及各文件头部说明。
+> 行文通用：条目沿用既有概念命名，不造同义新名；模糊量词以具体数字或列表替代（AGENTS.md §3 沟通红线）。
 
 ## context.md — 项目状态快照
 
