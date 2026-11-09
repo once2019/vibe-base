@@ -3,7 +3,7 @@
 > 规则与预算见 AGENTS.md §5（快照重写｜双预算 ≤40 行且单行 ≤150 字符｜并行会话先读最新再精确片段替换）。
 > 只记录当前状态，不堆历史——历史归属 docs/decisions/（索引 README.md）与 docs/progress/。
 
-- 最后更新：2026-10-24（会话标识：提交两会话累积修改）
+- 最后更新：2026-10-24（会话标识：提交推送 + l1-maintenance 草稿裁决回滚）
 
 ## 本会话已完成
 
@@ -15,7 +15,7 @@
 
 ## 下一步计划
 
-1. 人工裁决 assets/docs/governance/l1-maintenance.md 工作区措辞（回滚或采纳并同步根目录，见 handoff.md）
+1. skills/vibe-base.zip 重打包（上传属 Ask-first，需用户确认，见 handoff.md）
 
 ## 阻塞问题
 
