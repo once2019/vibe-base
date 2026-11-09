@@ -3,19 +3,19 @@
 > 规则与预算见 AGENTS.md §5（快照重写｜双预算 ≤40 行且单行 ≤150 字符｜并行会话先读最新再精确片段替换）。
 > 只记录当前状态，不堆历史——历史归属 docs/decisions/（索引 README.md）与 docs/progress/。
 
-- 最后更新：YYYY-MM-DD HH:MM（会话标识：<本次会话做了什么，一行>）
+- 最后更新：2026-10-24（会话标识：提交两会话累积修改）
 
 ## 本会话已完成
 
-- <完成后即移入 docs/progress/ 并从本快照删除>
+- 无进行时条目——完成项已移交 docs/progress/2026-10-24-权威文档登记表与核实门槛.md
 
 ## 进行中任务
 
-- <任务 + 当前状态；谁阻塞了它>
+- 无
 
 ## 下一步计划
 
-1. <按优先级排序>
+1. 人工裁决 assets/docs/governance/l1-maintenance.md 工作区措辞（回滚或采纳并同步根目录，见 handoff.md）
 
 ## 阻塞问题
 
@@ -23,4 +23,6 @@
 
 ## 关键决策索引（只列文件名，摘要见 decisions/README.md）
 
-- docs/decisions/YYYY-MM-DD-决策文件名.md
+- docs/decisions/2026-10-24-权威文档登记表与核实门槛.md
+- docs/decisions/2026-10-23-决策前显式核对门槛.md
+- docs/decisions/2026-10-22-复盘经验进治理体系.md

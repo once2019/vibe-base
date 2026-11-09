@@ -1,5 +1,6 @@
 ---
 name: vibe-base
+version: 1.0.3
 description: 初始化项目的 vibe coding 治理体系：当用户要求初始化项目治理、创建 AGENTS.md、新项目接入 vibe 模板、bootstrap 协作规范时，生成治理骨架（AGENTS.md + docs/ 三层记忆与文档体系），幂等不覆盖已有文件。日常的记忆写作与治理复盘细则由项目 AGENTS.md 直接引用本技能 references/ 下的文件，无需经本 description 触发。
 ---
 
