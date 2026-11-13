@@ -245,6 +245,19 @@ class TestInitAndTask(TempGitRepoMixin):
         self.assertNotEqual(a, b)
         self.assertTrue(a.startswith("docs/progress/"))
 
+    def test_uninitialized_repo_gives_readable_error(self) -> None:
+        """未 init 时不能抛 traceback：控制面命令必须给可执行提示（新项目首触点）。"""
+        self.repo.config_path.unlink()
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            with self.assertRaises(SystemExit):
+                foreman.main(["task", "new", "--repo", str(self.root),
+                              "--title", "X", "--accept", "true"])
+        msg = err.getvalue()
+        self.assertIn(".vibe 未初始化", msg)
+        self.assertIn("init --repo .", msg)
+        self.assertNotIn("Traceback", msg)
+
     def test_init_writes_exclude_idempotent(self) -> None:
         self.assertEqual(foreman.main(["init", "--repo", str(self.root)]), 0)
         exclude = (self.root / ".git" / "info" / "exclude").read_text()

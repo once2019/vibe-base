@@ -22,6 +22,8 @@
 - 过程态重设计：`.foreman/`→`.vibe/`；`task.json.docs.progress` 显式登记落点；`report` 写 `docs/progress/`；
   `reply --decision-doc` 为 Ask-first 硬门槛；`review` 增 `docs-decisions` 检查项
 - 脚手架：新增文件 13→18（拆解后 17）；占位符扫描排除 `scripts/` 与三份参考文档；不再复制 `__pycache__`
+- 追补：未 init 时的 traceback 改为可读错误（`Repo.config()` 一处兜住）；`.vibe/` 空骨架改由 init 一并建好，
+  「默认休眠」四条条文同步改写；测试 79→83 项
 - 收口：编排附属 3 份从 design/ 挪进 governance/；`governance-retrospective.md` 拆解——8 问与再复盘信号并入
   `governance-review.md`，证据链只留本仓库 design/，assets/docs/design/ 只剩占位 README
 - 验证：79 测试全绿（含变异实验）、双跑幂等、md5 镜像一致（详见 progress 文件）
@@ -31,6 +33,8 @@
 - [ ] 人工重装技能目录并删除旧的 `~/.pi/agent/skills/vibe-foreman`（安装属人工动作）
 - [ ] 真实通道 E2E：dispatch → worker → DONE → review → merge → report 全链路
 - [ ] `skills/vibe-base.zip` 重打包（上传属 Ask-first）
+- [ ] `~/storyboard-maker` 已接入新版体系但未提交：其 ruff/mypy 门槛拦 `scripts/foreman.py`
+      （14 处 ruff、20 处 mypy），待选「修上游」或「项目侧排除 scripts/」
 
 ## 关键决策引用
 

@@ -5,10 +5,13 @@
 运行后扫描骨架文件（含已存在的，格式示例文件除外）中的 `<...>` 占位符并按 文件:行 报告，
 作为回填进度参考；复跑可查看剩余待回填项。
 退出码：0=流程完成（含全部跳过）；2=skill assets 缺失或为空。
+.vibe/ 过程态骨架随骨架一起建好：在 git 仓库里调用随骨架落地的 scripts/foreman.py init（幂等）。
+
 """
 import argparse
 import re
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -34,6 +37,26 @@ REFERENCE_DOCS = (
 )
 
 PLACEHOLDER_RE = re.compile(r"<([^<>\n]+)>")
+
+
+def bootstrap_state(target: Path) -> tuple[bool, str]:
+    """把 .vibe/ 过程态骨架一并建好：调用随骨架落地的 scripts/foreman.py init（幂等）。
+
+    只在 git 仓库里做：foreman.py init 要读 base 分支，非 git 目录给提示后跳过。
+    骨架与能力启用是两件事：目录先备好，不派工、不探测通道。
+    """
+    script = target / "scripts" / "foreman.py"
+    if not (target / ".git").exists():
+        return False, "跳过 .vibe/ 骨架：目标还不是 git 仓库（git init 后跑 scripts/foreman.py init）"
+    if not script.exists():
+        return False, "跳过 .vibe/ 骨架：scripts/foreman.py 未落地"
+    proc = subprocess.run([sys.executable, str(script), "init", "--repo", str(target)],
+                          capture_output=True, text=True)
+    if proc.returncode != 0:
+        reason = (proc.stderr or proc.stdout).strip().splitlines()
+        return False, f".vibe/ 骨架未建：{reason[-1] if reason else f'exit={proc.returncode}'}"
+    first = (proc.stdout or "").strip().splitlines()
+    return True, first[0] if first else ".vibe/ 已初始化"
 
 
 def collect_asset_files():
@@ -105,6 +128,9 @@ def main():
             print(f"  {rel}:{lineno} -> {text}")
     else:
         print("无待填占位符。")
+
+    ok, note = bootstrap_state(target)
+    print(("编排骨架：" if ok else "!! ") + note)
 
     print("下一步：骨架生成完毕。占位符 <...> 无需当场追问，由 Agent 在后续开发中获知实际信息时主动回填；上述清单即回填进度参考。")
     return 0

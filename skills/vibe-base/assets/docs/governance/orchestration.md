@@ -1,7 +1,7 @@
 # 执行编排细则（规划与实施分离）
 
 > 触发：人类说"用规划与实施分离把 X 落地 / 派 worker 去做 / 并行推进这几件事"。
-> **不说就不启用**：本能力默认休眠——不建 `.vibe/`、不探测编排通道、不派生 agent。
+> **不说就不启用**：不派工、不探测编排通道、不派生 agent。`.vibe/` 空骨架随 init 备好，目录存在不等于启用。
 > 红线、预算与文档归属见 AGENTS.md（§4 合并权与 Ask-first、§5 记忆归属、§6 文档落点、§7 工作流程）；本文件只写"怎么执行"。
 > 理念与"什么时候不该用"见 `docs/governance/orchestration-doctrine.md`；派工单写法见 `docs/governance/dispatch-template.md`；
 > Orca 排障见 `docs/governance/orchestration-orca.md`（仅人工介入时读）。控制面脚本：`scripts/foreman.py`（纯标准库）。

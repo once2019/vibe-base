@@ -263,6 +263,9 @@ class Repo:
     # ---- 配置 ----
 
     def config(self) -> dict:
+        if not self.config_path.exists():
+            fail(".vibe 未初始化（缺 config.json），先运行："
+                 "python3 scripts/foreman.py init --repo .")
         cfg = read_json(self.config_path)
         base = cfg.get("base")
         if not base:
@@ -1134,8 +1137,6 @@ def cmd_init(args: argparse.Namespace) -> int:
 def cmd_task_new(args: argparse.Namespace) -> int:
     repo = Repo(Path(args.repo))
     assert_coordinator(repo, effective_config(repo))
-    if not repo.config_path.exists():
-        fail(".vibe 未初始化，先运行 init")
     cfg = effective_config(repo)
     task_id = repo.next_task_id()
     task = {

@@ -60,7 +60,7 @@ docs/
 ├── memory/      # 记忆文件：context.md、handoff.md
 └── specs/       # 需求规格：功能描述、验收标准
 
-.vibe/           # 执行编排过程态：任务 JSON / 派工单 / 证据（本地忽略、不入库；不存在=该能力未启用）
+.vibe/           # 执行编排过程态：任务 JSON / 派工单 / 证据（本地忽略、不入库；init 建空骨架，派工前不写状态）
 ```
 
 - 索引：状态快照 `docs/memory/context.md`｜交接 `docs/memory/handoff.md`｜决策索引 `docs/decisions/README.md`｜决策模板 `docs/decisions/_template.md`｜design / specs 职责与权威文档索引、progress 职责见各目录 README。
@@ -82,7 +82,7 @@ docs/
 3. 修 bug 必须向前反思影响面：同一错误可能不止污染触发点——已落库的数据、依赖同一段逻辑的其他管线都在影响范围内，逐一修正或确认无涉，不允许只修代码不修影响。
 4. 收尾阶段：自问"哪里可能出错"（边界/错误处理/安全；测试通过 ≠ 符合意图）→ 更新 `docs/progress/` 对应执行文档 → 设计有变更则同步 `docs/design/` 并标注原因 → 会话收尾写 `docs/memory/handoff.md`（运行态条目带失效条件）。
 
-- 规划与实施分离（多任务并行、隔离实施、隔离验收）时按 `docs/governance/orchestration.md` 执行：主管 = 人类所在的会话（唯一，可拍板与合并），worker = 派工拉起的子 agent（只实现）。不说就不启用：该能力默认休眠，不建过程态、不探测编排通道。
+- 规划与实施分离（多任务并行、隔离实施、隔离验收）时按 `docs/governance/orchestration.md` 执行：主管 = 人类所在的会话（唯一，可拍板与合并），worker = 派工拉起的子 agent（只实现）。不说就不启用：该能力默认休眠，不派工、不探测编排通道（`.vibe/` 空骨架随 init 备好）。
 
 ## 8. 规则冲突与自身维护
 
