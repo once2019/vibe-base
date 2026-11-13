@@ -284,6 +284,12 @@ class TestInitAndTask(TempGitRepoMixin):
         self.assertIn("[FOREMAN:<TYPE>] task=T-001", brief)
         self.assertIn("ASK", brief)
         self.assertIn("```bash\ntrue\n```", brief)
+        # worker 必须自审后才上报：派工单里要有可执行的四查，不是一句"自测通过"
+        self.assertIn("## 自审（发 DONE 之前必须做", brief)
+        self.assertIn("git diff master...HEAD", brief)
+        for item in ("范围：", "验收：", "无跳过：", "无密钥："):
+            self.assertIn(item, brief)
+        self.assertIn("不采信自报", brief)
         self.assertEqual(foreman.main(["task", "new", "--repo", str(self.root), "--title", "第二个"]), 0)
         self.assertEqual(self.repo.load_task("T-002")["status"], "pending")
         with self.assertRaises(SystemExit):  # 无验收命令不允许派工
@@ -319,6 +325,8 @@ class TestDispatch(TempGitRepoMixin):
         self.assertIn("FOREMAN:ASK", prompt)
         self.assertIn("D-001", prompt)
         self.assertIn("brief.md", prompt)
+        self.assertIn("发 DONE 之前先自审", prompt)
+        self.assertIn("自审四项结论", prompt)
 
     def test_dispatch_refuses_duplicate_tree(self) -> None:
         self.full_task()

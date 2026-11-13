@@ -15,7 +15,7 @@
 
 ## 一次闭环
 
-人类给目标 → 主管拆任务/写派工单 → worker 在独立 worktree 实现 → 主管审 diff + 跑验收 → 合并删树 → 竣工单（即 `docs/progress/` 进度文件）。
+人类给目标 → 主管拆任务/写派工单 → worker 在独立 worktree 实现并自审 → 主管审 diff + 复跑验收 → 合并删树 → 竣工单（即 `docs/progress/` 进度文件）。
 
 ```bash
 F=scripts/foreman.py
@@ -36,7 +36,7 @@ python3 $F report T-001             # 竣工单 → docs/progress/（入库）
 ## 角色与权限
 
 - **主管** = 人类直接对话的会话（每仓唯一；并行的是任务，不是主管）。可跑控制面命令（task / dispatch / events / reply / ask / review / merge / report）。
-- **worker** = `dispatch` 拉起的子 agent（收到 `[FOREMAN:*]` 消息或读到 `running` 的派工单）。只实现、只上报；Orca 模式下跑控制面命令会被代码拒绝（hcom 模式没有这层判定，靠派工单红线约束）。
+- **worker** = `dispatch` 拉起的子 agent（收到 `[FOREMAN:*]` 消息或读到 `running` 的派工单）。只实现、只上报；发 DONE 之前必须先自审（范围 / 验收 / 无跳过 / 无密钥四项，见派工单「自审」节）并修完，DONE 正文带这四项结论。Orca 模式下跑控制面命令会被代码拒绝（hcom 模式没有这层判定，靠派工单红线约束）。
 - 主管不写业务代码；worker 不做决策、不碰合并权、不 push。
 
 ## 决策档位（只有三个名字，见 AGENTS.md §3）

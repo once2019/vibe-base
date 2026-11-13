@@ -1,7 +1,8 @@
 # 派工单模板
 
 - 变更日期：2026-11-13
-- 变更原因：并入 vibe-base；补上“worker 不写 docs/memory/、docs/progress/”这一条与 docs 落点说明
+- 变更原因：并入 vibe-base；补上“worker 不写 docs/memory/、docs/progress/”这一条与 docs 落点说明；
+  追加「自审」节：worker 上报前必须自查并修完，主管仍独立复跑
 
 `scripts/foreman.py` 的 `task new` / `dispatch` 按 `brief_text()` 生成实际派工单（以生成物为准，本模板说明各节的写法意图）。主管手写或修改派工单时按下述要求：
 
@@ -11,6 +12,8 @@
 - **范围**：允许改动的路径清单（对应 `task.json.scope`）。禁止写"相关文件"；要么列路径，要么明确"全库（谨慎）"。
 - **补充说明**：仓库特殊约定、必须遵循的 AGENTS.md 章节、禁止事项（超出通用红线的部分）。
 - **完成定义**：一条可执行验收命令（对应 `task.json.acceptance`），必须是 worker 能在 worktree 内直接运行的完整命令；不接受"确保测试通过"这类不可执行表述。
+- **自审**：固定段，不修改——worker 发 DONE 之前的四项自查（范围、验收、无跳过、无密钥），命令按 base 展开。
+  它是上报的前置条件而不是建议：任一条不通过就先修，修完重跑；主管收到 DONE 后仍独立复跑同样四项，不采信自报。
 - **协议**：固定段，不修改——消息头格式与 ASK/DONE/ESCALATE 用法。
 - **红线**：固定段，不修改——含“不写 `docs/memory/` 与 `docs/progress/`”与“影响面超范围发 ASK”；两条都来自 AGENTS.md §5 记忆归属。
 

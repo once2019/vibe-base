@@ -1018,37 +1018,41 @@ class Orca(Transport):
 
 def worker_prompt(cfg: dict, task: dict, dispatch: dict, brief_path: Path) -> str:
     foreman = cfg["foreman_name"]
+    base = cfg.get("base") or "main"
     head = (
         f"你是 vibe-foreman 的 worker，负责任务 {task['id']}（派工记录 {dispatch['id']}）。\n"
         f"1. 阅读并完整遵循仓库 AGENTS.md（若存在）与派工单 {brief_path}（注意：派工单在主仓库目录，不在本 worktree 内）。\n"
         "2. 只做派工单范围内的事；完成后在当前 worktree 提交，每个提交对应一件事，提交信息说明为什么。\n"
+        f"3. 发 DONE 之前先自审，这是上报的前置条件：`git diff {base}...HEAD` 通读自己的每一行"
+        "（范围、密钥、调试残留、注释掉的代码），复跑验收命令，确认没删测试、没 skip/only、没 --no-verify；"
+        "任一条不过就先修再重跑，修完才发 DONE。DONE 正文必须带自审四项结论（范围/验收/无跳过/无密钥）。\n"
     )
     if cfg.get("transport") == "orca":
         run_id = dispatch.get("run_id") or "<run_id>"
         proto = (
-            f"3. 需要裁决时运行：orca orchestration send --to run:{run_id} --subject "
+            f"4. 需要裁决时运行：orca orchestration send --to run:{run_id} --subject "
             f"'[FOREMAN:ASK] task={task['id']} dispatch={dispatch['id']}' "
             f"--body '<问题+选项+推荐项>'，然后结束回合等回复。\n"
-            f"4. 全部完成并自测通过后运行：orca orchestration send --to run:{run_id} --type worker_done "
+            f"5. 自审通过后上报完成：orca orchestration send --to run:{run_id} --type worker_done "
             f"--outcome succeeded --subject '[FOREMAN:DONE] task={task['id']} dispatch={dispatch['id']}' "
-            f"--body '<摘要+改动文件+验证命令与输出+分支提交>'，然后停止。"
+            f"--body '<摘要+改动文件+自审四项结论+验证命令与输出+分支提交>'，然后停止。"
             f"（放弃任务时用 --outcome failed。若 Orca 回 'worker_done requires taskId'，"
             f"用 `orca orchestration worker-list --json` 查本次 dispatch 的 taskId，"
             f"再补 --task-id <taskId> 重发同一封，不要改正文。）\n"
-            f"5. 卡住时发 --subject '[FOREMAN:ESCALATE] task={task['id']} dispatch={dispatch['id']}' "
+            f"6. 卡住时发 --subject '[FOREMAN:ESCALATE] task={task['id']} dispatch={dispatch['id']}' "
             f"--body '<已尝试方案+阻塞点>'，然后停止。\n"
             "Orca 的协议头放在 --subject，只在协议头里写 task/dispatch，正文放 --body。\n"
             "回复会以 Orca 唤醒到达；必要时先 orca orchestration check --json 读取。\n"
         )
     else:
         proto = (
-            f"3. 需要裁决时运行：hcom send @{foreman} --intent request --name <你的实例名> -- "
+            f"4. 需要裁决时运行：hcom send @{foreman} --intent request --name <你的实例名> -- "
             f"'[FOREMAN:ASK] task={task['id']} dispatch={dispatch['id']} <问题+选项+推荐项>'，"
             f"然后结束回合等待回复。\n"
-            f"4. 全部完成并自测通过后运行：hcom send @{foreman} --intent request --name <你的实例名> -- "
-            f"'[FOREMAN:DONE] task={task['id']} dispatch={dispatch['id']} <摘要+改动文件+验证命令与输出+分支提交>'，"
+            f"5. 自审通过后上报完成：hcom send @{foreman} --intent request --name <你的实例名> -- "
+            f"'[FOREMAN:DONE] task={task['id']} dispatch={dispatch['id']} <摘要+改动文件+自审四项结论+验证命令与输出+分支提交>'，"
             f"然后停止。\n"
-            f"5. 卡住时发 '[FOREMAN:ESCALATE] task={task['id']} dispatch={dispatch['id']} <已尝试方案+阻塞点>'，"
+            f"6. 卡住时发 '[FOREMAN:ESCALATE] task={task['id']} dispatch={dispatch['id']} <已尝试方案+阻塞点>'，"
             f"然后停止。\n"
             "<你的实例名> 用你启动时 [HCOM SESSION] bootstrap 里告知的名字；不要用本段文字里的任何名字。\n"
         )
@@ -1058,6 +1062,7 @@ def worker_prompt(cfg: dict, task: dict, dispatch: dict, brief_path: Path) -> st
 
 
 def brief_text(cfg: dict, task: dict) -> str:
+    base = cfg.get("base") or "main"
     scope = "\n".join(f"- {s}" for s in task.get("scope", [])) or "- 全库（谨慎）"
     orca = cfg.get("transport") == "orca"
     dispatches = task.get("dispatches") or []
@@ -1087,6 +1092,23 @@ def brief_text(cfg: dict, task: dict) -> str:
 ```bash
 {task.get('acceptance') or '（主管尚未定义；开工前先通过 ASK 索要）'}
 ```
+
+## 自审（发 DONE 之前必须做，修完再上报）
+
+在 worktree 内逐条自查，任一条不通过就先修，修完重跑：
+
+```bash
+git diff {base}...HEAD --stat    # 改动面是否都在范围内
+git diff {base}...HEAD           # 通读每一行：无调试残留、无注释掉的代码、无密钥
+```
+
+- 范围：`git diff --name-only {base}...HEAD` 的每个文件都在上面的范围清单里。
+- 验收：上面的验收命令重跑通过，命令与输出原文贴进 DONE。
+- 无跳过：没有删测试、没有 skip/only、没有 `--no-verify`。
+- 无密钥：diff 里没有 token/key/password 字面量。
+- 逐条对照完成定义与验收标准，偏差先修。
+
+DONE 正文必须带这四项的结论（范围/验收/无跳过/无密钥）。主管会独立复跑同样的检查，不采信自报。
 
 ## 协议
 
