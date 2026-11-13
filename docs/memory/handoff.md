@@ -38,6 +38,8 @@
 - [ ] 人工重装技能目录并删除旧的 `~/.pi/agent/skills/vibe-foreman`（安装属人工动作）
 - [ ] 真实通道 E2E：dispatch → worker → DONE → review → merge → report 全链路
 - [ ] `skills/vibe-base.zip` 重打包（上传属 Ask-first）
+- [ ] **storyboard-maker 已冻结**（人类指令 2026-11-13）：技能完善前不再逐次同步，之后一次性整体升级。
+      冻结点 `acaf06e`（未 push，`cnb/main..master` 251 个提交，其中含他人会话的 T-004 未跟踪竣工单，勿动）
 - [x] `~/storyboard-maker` 接入完成并提交（`4db5885`）：控制面先过一遍标准 lint/类型
       （ruff 14→0、mypy 20→6→0），故无需在项目侧加 overrides
 
