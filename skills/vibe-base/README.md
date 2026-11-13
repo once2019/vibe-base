@@ -154,7 +154,7 @@ cp -r skills/vibe-base ~/.codex/skills/
 
 ## 这个模板长这样，是复盘出来的
 
-模板在真实项目实战一周（54 条决策）后做了一轮治理复盘：8 个反模式（入口膨胀、压行不压量、规则相抵、决策无索引、Ask-first 散落、易腐运行态、bootstrap 膨胀、不可测触发）各有实测证据与改法，已全部固化进模板本体。证据与自查清单见 `skills/vibe-base/assets/docs/design/governance-retrospective.md`。
+模板在真实项目实战一周（54 条决策）后做了一轮治理复盘：8 个反模式（入口膨胀、压行不压量、规则相抵、决策无索引、Ask-first 散落、易腐运行态、bootstrap 膨胀、不可测触发）各有实测证据与改法，已全部固化进模板本体。证据链见本技能维护仓库的 `docs/design/governance-retrospective.md`；自查 8 问与再复盘信号已并入项目 `docs/governance/governance-review.md`（唯一正本）。
 
 ## 这个模板不做什么
 

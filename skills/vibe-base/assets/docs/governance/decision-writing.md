@@ -2,7 +2,7 @@
 
 > 格式骨架见 `docs/decisions/_template.md`（复制后填写）；索引格式见 `docs/decisions/README.md`。
 > 本文件写"何时建条、每节怎么写、修订怎么选路"的判断细则。
-> 出处：`docs/design/governance-retrospective.md` 反模式 #1/#4/#5 及 ashare-lake 实战沉淀（54 条决策的失范样本）。
+> 判断依据来自实战失范样本（54 条决策）；证据链属技能维护记录，不在项目内分发。
 
 ## 何时建条
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """foreman.py — vibe-base 执行编排控制面 CLI（仅 Python 标准库）。
 
-条文正本：仓库 docs/governance/orchestration.md；理念：docs/design/orchestration-doctrine.md。
+条文正本：仓库 docs/governance/orchestration.md；理念：docs/governance/orchestration-doctrine.md。
 层级固定：编排通道（hcom/Orca）作事件层、git worktree 作隔离层、.vibe/ 作过程态层。
 过程态不入库、随会话消失；归档后事实源是 docs/progress/ 与 docs/decisions/。
 所有通道调用收口在 Transport 实现类；过程态唯一事实源是 tasks/<id>/task.json，写入原子化。

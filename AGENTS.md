@@ -90,4 +90,4 @@ docs/
 - 写入前先查重：本文件与其他文档已有的规则不得复述第二遍，新规则写入唯一对应位置。
 - 发现本文件规则过时或被反复违反：先修改本文件，再按新规则执行；修订时在 `docs/decisions/` 记录原因。
 - 本文件像代码一样治理：定期修剪，提交前自查是否新增了"Agent 读代码即可获知"的冗余内容。
-- 治理细则见 `docs/governance/l1-maintenance.md`（规则修订）与 `docs/governance/governance-review.md`（复盘）；方法论正本 `docs/design/governance-retrospective.md`。
+- 治理细则见 `docs/governance/l1-maintenance.md`（规则修订）与 `docs/governance/governance-review.md`（复盘：含自查 8 问与再复盘信号，清单只在该文件维护）。

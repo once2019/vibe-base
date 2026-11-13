@@ -21,7 +21,9 @@
   §5 记忆归属（docs/memory 主管独占）、§3 决策档位三词、§6 纳入 `.vibe/`
 - 过程态重设计：`.foreman/`→`.vibe/`；`task.json.docs.progress` 显式登记落点；`report` 写 `docs/progress/`；
   `reply --decision-doc` 为 Ask-first 硬门槛；`review` 增 `docs-decisions` 检查项
-- 脚手架：新增文件 13→18；占位符扫描排除 `scripts/` 与三份参考文档；不再复制 `__pycache__`
+- 脚手架：新增文件 13→18（拆解后 17）；占位符扫描排除 `scripts/` 与三份参考文档；不再复制 `__pycache__`
+- 收口：编排附属 3 份从 design/ 挪进 governance/；`governance-retrospective.md` 拆解——8 问与再复盘信号并入
+  `governance-review.md`，证据链只留本仓库 design/，assets/docs/design/ 只剩占位 README
 - 验证：79 测试全绿（含变异实验）、双跑幂等、md5 镜像一致（详见 progress 文件）
 
 ## 未完成工作清单
@@ -38,6 +40,7 @@
 ## 新会话必须遵守的约束
 
 - 编排块的条文正本是 `docs/governance/orchestration.md`（与 assets 成对）；不得另建第二份编排说明
-- 根目录与 `skills/vibe-base/assets/` 成对镜像；例外：`docs/design/README.md` 根=实况行、模板=占位行
+- 根目录与 `skills/vibe-base/assets/` 成对镜像；例外：`docs/design/README.md` 根=实况行、模板=占位行；
+  `docs/design/governance-retrospective.md` 只在根（技能维护记录，不随 init 分发）
 - 状态变更只经 `scripts/foreman.py`，不手改 `.vibe/` 下的 task.json 与 evidence
 - 改 `foreman.py` 后必须跑仓库根 `python3 -m unittest discover -s tests`（`tests/` 属本仓库，不随技能分发）
