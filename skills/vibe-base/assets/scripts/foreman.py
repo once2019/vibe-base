@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -208,6 +209,40 @@ def slugify(title: str) -> str:
     return (slug[:40] or "task").rstrip("-")
 
 
+def hcom_instances(bin_name: str, cwd: Path, timeout: int = 120) -> list[dict] | None:
+    """hcom 实例表；None = 取不到（调用方自己决定 fail 还是退回默认名）。"""
+    proc = run_cmd([bin_name, "list", "--json"], cwd=cwd, timeout=timeout)
+    if proc.returncode != 0:
+        return None
+    try:
+        data = json.loads((proc.stdout or "").strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        return None
+    if isinstance(data, dict):
+        data = data.get("instances") or []
+    return [x for x in data if isinstance(x, dict)] if isinstance(data, list) else []
+
+
+def foreman_name_candidates(repo: Repo) -> list[str]:
+    """默认名 → 路径短哈希名：同一目录永远同一名字，同名目录靠路径区分。"""
+    slug = slugify(repo.root.name)
+    digest = hashlib.sha1(str(repo.root).encode("utf-8")).hexdigest()
+    return [f"{slug}-foreman", f"{slug}-{digest[:4]}-foreman", f"{slug}-{digest[:8]}-foreman"]
+
+
+def pick_foreman_name(repo: Repo, bin_name: str = "hcom") -> str:
+    """挑一个没被别的仓库占用的主管名；取不到实例表就退回默认名（doctor 会再查）。"""
+    cands = foreman_name_candidates(repo)
+    if shutil.which(bin_name) is None:
+        return cands[0]
+    items = hcom_instances(bin_name, repo.root, timeout=60)
+    if items is None:
+        return cands[0]
+    root = str(repo.root)
+    taken = {x.get("name") for x in items if not str(x.get("directory") or "").startswith(root)}
+    return next((c for c in cands if c not in taken), cands[-1])
+
+
 def append_log(path: Path, text: str) -> None:
     """追加一行/多行日志；超过 LOG_MAX_BYTES 先轮转到 .1（只留一份历史）。"""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -279,7 +314,7 @@ class Repo:
             # 名字是 hcom 机器级寻址：同机两个仓都用默认名会互相取走回执，
             # 因此默认带仓库目录名（init 写进 config 后就不再变）
             "foreman_name": f"{slugify(self.root.name)}-foreman",
-            "tag": "foreman",
+            "tag": slugify(self.root.name),
             "default_agent": "codex",
             "base": branch or "main",
             "max_attempts": 3,
@@ -661,18 +696,11 @@ class Hcom(Transport):
     def _name_owner_check(self) -> dict:
         """同名实例若挂在别的仓库目录下，回执会被那个仓的主管取走（同机多仓并行的经典翻车）。"""
         name = self.foreman_name
-        proc = self._run("list", "--json", timeout=120)
-        if proc.returncode != 0:
+        items = hcom_instances(self.bin, self.repo.root)
+        if items is None:
             return {"name": "hcom-name", "ok": False,
-                    "detail": f"hcom list 失败，无法确认 {name} 是否被别的仓占用",
-                    "fix": (proc.stderr or proc.stdout).strip()[:120]}
-        try:
-            items = json.loads((proc.stdout or "").strip().splitlines()[-1])
-        except (ValueError, IndexError):
-            return {"name": "hcom-name", "ok": False, "detail": f"hcom list 回执不是 JSON，无法确认 {name} 归属",
+                    "detail": f"hcom list 取不到实例表，无法确认 {name} 是否被别的仓占用",
                     "fix": "手工运行 hcom list --json 核对"}
-        if not isinstance(items, list):
-            items = items.get("instances") or []
         root = str(self.repo.root)
         foreign = [x for x in items if isinstance(x, dict) and x.get("name") == name
                    and not str(x.get("directory") or "").startswith(root)]
@@ -1145,6 +1173,11 @@ def cmd_init(args: argparse.Namespace) -> int:
 
     before = read_json(repo.config_path) if repo.config_path.exists() else None
     cfg = repo.load_or_default_config()
+    if before is None and not args.foreman_name:
+        # 只在新仓库上挑名字：已有配置不静默改名（改错更难查，doctor 会提示）
+        cfg["foreman_name"] = pick_foreman_name(repo, cfg.get("hcom_bin", "hcom"))
+    if args.tag:
+        cfg["tag"] = args.tag
     if args.base:
         cfg["base"] = args.base
     if args.agent:
@@ -1909,6 +1942,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--transport", choices=["hcom", "orca", "auto"],
                     help="编排通道：auto（默认，Orca 终端→orca 否则 hcom）/ hcom / orca")
     sp.add_argument("--foreman-name", help="主管在编排通道里的身份（hcom 模式=会话名；worker 上报目标）")
+    sp.add_argument("--tag", help="hcom 分组标签（worker 名变成 tag-*，默认取仓库目录名）")
     add_json(sp)
     sp.set_defaults(func=cmd_init)
 
