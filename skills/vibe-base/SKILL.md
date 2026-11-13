@@ -6,7 +6,7 @@ description: 初始化项目的 vibe coding 治理体系，并把「规划与实
 
 # vibe-base — 治理骨架初始化 + 执行编排分发
 
-本技能承载两件事：①治理骨架的初始化流程（下文）；②规范与细则的正本分发——assets/ 含 AGENTS.md 模板、全部细则（`docs/governance/` 五份）、执行编排块（`scripts/foreman.py` + `docs/governance/` 编排四份），随 init 一起落入项目，由项目 AGENTS.md 直接引用，不经本文件路由。
+本技能承载两件事：①治理骨架的初始化流程（下文）；②规范与细则的正本分发——assets/ 含 AGENTS.md 模板、治理细则四份（`docs/governance/`）、执行编排块（`scripts/foreman.py` + 编排四份：orchestration 三份与派工单模板），随 init 一起落入项目，由项目 AGENTS.md 直接引用，不经本文件路由。
 
 ## 初始化流程
 
@@ -42,7 +42,7 @@ mkdir -p ~/.pi/agent/skills
 cp -r skills/vibe-base ~/.pi/agent/skills/
 ```
 
-无第三方依赖（Python 3.8+ 标准库）。回归测试不在技能包内，由维护本技能的仓库运行（仓库根 `tests/`，`python3 -m unittest discover -s tests`）。
+无第三方依赖（Python 3.9+ 标准库：控制面用了 `Path.is_relative_to`，脚手架用了内置泛型注解）。回归测试不在技能包内，由维护本技能的仓库运行（仓库根 `tests/`，`python3 -m unittest discover -s tests`）。
 
 ## 红线
 
@@ -54,4 +54,4 @@ cp -r skills/vibe-base ~/.pi/agent/skills/
 ## Tradeoff
 
 占位符回填制牺牲"一次填完的完整性"换取冷启动零打断；存量信息丰富的项目可初始化时主动回填，豁免等待。
-把编排能力随骨架一起发（18 个文件、含 1 个 1900 行脚本）换取"一个技能、一次安装、会话里说一句就能用"；代价是新项目多一个可能不用的脚本，且项目自持副本不随技能升级（重跑 init 默认跳过，需 `--force` 或人工对照）。
+把编排能力随骨架一起发（17 个文件、含 1 个 2094 行脚本）换取"一个技能、一次安装、会话里说一句就能用"；代价是新项目多一个可能不用的脚本，且项目自持副本不随技能升级（重跑 init 默认跳过，需 `--force` 或人工对照）。

@@ -183,12 +183,6 @@ def header_candidates(text: str) -> list[tuple[str, str, str]]:
     return seen
 
 
-def parse_header(text: str) -> tuple[str, str, str] | None:
-    """解析消息首行 [FOREMAN:<TYPE>] task=<id> dispatch=<id>（允许同行跟正文）；无协议头返回 None。"""
-    cands = header_candidates(text)
-    return cands[0] if cands else None
-
-
 def safe_name(raw: object, limit: int = 40) -> str:
     """外部传入的标识（发送者名）不得直接拼进文件路径。"""
     return re.sub(r"[^0-9A-Za-z_.-]+", "_", str(raw or "?"))[:limit] or "?"

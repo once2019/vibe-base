@@ -72,6 +72,13 @@ def collect_asset_files():
     return sorted(p for p in ASSETS_DIR.rglob("*") if is_scaffold_file(p))
 
 
+def skipped_asset_files() -> list[Path]:
+    """assets 里被过滤掉的文件（缓存之外的点文件）：不该静默消失。"""
+    return sorted(p for p in ASSETS_DIR.rglob("*")
+                  if p.is_file() and not is_scaffold_file(p)
+                  and not any(part in CACHE_PARTS or part == "__pycache__" for part in p.parts))
+
+
 def copy_scaffold(target: Path, force: bool):
     created, skipped = [], []
     for src in collect_asset_files():
@@ -154,6 +161,11 @@ def main():
             print(f"  {rel}:{lineno} -> {text}")
     else:
         print("无待填占位符。")
+
+    ignored = skipped_asset_files()
+    if ignored:
+        print("注意：以下 assets 文件不参与复制（点开头/缓存规则）："
+              + ", ".join(p.relative_to(ASSETS_DIR).as_posix() for p in ignored))
 
     drift = drift_note(target, skipped)
     if drift:

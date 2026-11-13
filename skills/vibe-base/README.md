@@ -209,12 +209,16 @@ cp -r skills/vibe-base ~/.codex/skills/
 
 ## 维护这个模板
 
-正本是 `skills/vibe-base/assets/`；根目录同名文件是它的镜像（`docs/design/README.md` 例外：根=实况行、模板=占位行；`docs/design/governance-retrospective.md` 只在根，属维护记录）。改完逐项验证：
+正本是 `skills/vibe-base/assets/`；根目录同名文件是它的镜像。例外两类：
+
+- 状态类文件（`docs/memory/context.md`、`docs/memory/handoff.md`、`docs/decisions/README.md`、`docs/specs/README.md`、`docs/design/README.md`）根是本仓实况、模板必须是占位；照镜像去同步它们，等于把本仓的会话状态发给所有新项目
+- `docs/design/governance-retrospective.md` 只在根，属维护记录
+
+这条不变量由 `tests/test_mirror.py` 守着（含反向守卫：实况与模板不同的文件集合变了就报错）。改完逐项验证：
 
 ```bash
 python3 -m unittest discover -s tests          # 控制面回归（仓库根）
 python3 skills/vibe-base/scripts/init_vibe_project.py /tmp/tpl-a   # 脚手架双跑：首跑 N 新建、复跑 0 新建
-md5sum AGENTS.md skills/vibe-base/assets/AGENTS.md                 # 镜像逐文件对照
 ```
 
 打包 `skills/vibe-base.zip` 后上传属 Ask-first。改 `scripts/foreman.py` 须同步根目录镜像并复跑回归。

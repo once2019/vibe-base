@@ -156,11 +156,17 @@ class TempGitRepoMixin(unittest.TestCase):
 
 
 class TestUnits(unittest.TestCase):
-    def test_parse_header(self) -> None:
-        self.assertEqual(foreman.parse_header("[FOREMAN:ASK] task=T-001 dispatch=D-001\nq"),
-                         ("ASK", "T-001", "D-001"))
-        self.assertEqual(foreman.parse_header("no header"), None)
-        self.assertEqual(foreman.parse_header(""), None)
+    def test_header_candidates(self) -> None:
+        self.assertEqual(foreman.header_candidates("[FOREMAN:ASK] task=T-001 dispatch=D-001\nq"),
+                         [("ASK", "T-001", "D-001")])
+        self.assertEqual(foreman.header_candidates("no header"), [])
+        self.assertEqual(foreman.header_candidates(""), [])
+        # 同一封里两个不同协议头：调用方必须按歧义失败，这里只保证去重保序
+        two = ("[FOREMAN:DONE] task=T-001 dispatch=D-001\n"
+               "[FOREMAN:DONE] task=T-001 dispatch=D-001\n"
+               "[FOREMAN:ASK] task=T-002 dispatch=D-002\n")
+        self.assertEqual(foreman.header_candidates(two),
+                         [("DONE", "T-001", "D-001"), ("ASK", "T-002", "D-002")])
 
     def test_slugify(self) -> None:
         self.assertEqual(foreman.slugify("实现 X!"), "实现-x")
@@ -671,10 +677,10 @@ class TestProtocolParsing(unittest.TestCase):
         sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
         import foreman
         # worker 把问题写在协议头同一行（历史行为），必须仍能解析
-        got = foreman.parse_header("[FOREMAN:ASK] task=T-001 dispatch=D-001 范围与目标冲突：xxx")
-        self.assertEqual(got, ("ASK", "T-001", "D-001"))
-        got2 = foreman.parse_header("[FOREMAN:DONE] task=T-001 dispatch=D-001\n摘要")
-        self.assertEqual(got2, ("DONE", "T-001", "D-001"))
+        got = foreman.header_candidates("[FOREMAN:ASK] task=T-001 dispatch=D-001 范围与目标冲突：xxx")
+        self.assertEqual(got, [("ASK", "T-001", "D-001")])
+        got2 = foreman.header_candidates("[FOREMAN:DONE] task=T-001 dispatch=D-001\n摘要")
+        self.assertEqual(got2, [("DONE", "T-001", "D-001")])
 
     def test_sender_outside_dispatches_is_flagged(self):
         """协议头权威，但发送者不在派工记录里要留痕：这是名字撞线的残留信号。"""
@@ -1112,6 +1118,38 @@ class TestDefaultForemanName(unittest.TestCase):
             na = foreman.Repo(Path(a)).load_or_default_config()["foreman_name"]
             nb = foreman.Repo(Path(b)).load_or_default_config()["foreman_name"]
             self.assertNotEqual(na, nb)
+
+
+class TestMergePostVerify(TempGitRepoMixin):
+    """合并后复跑验收不过：合并提交已存在，任务保持 merge_ready，不许自动重试。"""
+
+    def test_merge_keeps_merge_ready_when_post_verify_fails(self) -> None:
+        """合并后复跑验收不过：合并提交已存在，任务保持 merge_ready，不许自动重试。"""
+        marker = Path(tempfile.mkdtemp()) / "gate"
+        self.addCleanup(shutil.rmtree, marker.parent, True)
+        self.full_task(accept=f"test -f {marker}")
+        self.dispatch()
+        wt = Path(self.repo.load_task("T-001")["dispatches"][0]["worktree"])
+        (wt / "src" / "feature.txt").write_text("done\n", encoding="utf-8")
+        self.commit_in(wt, "feat: x")
+        self.set_event("[FOREMAN:DONE] task=T-001 dispatch=D-001\n完成")
+        self.assertEqual(self.run_events(), 0)
+        marker.touch()  # review 阶段验收通过
+        self.assertEqual(foreman.main(["review", "T-001", "--repo", str(self.root)]), 0)
+        self.assertEqual(self.repo.load_task("T-001")["status"], "merge_ready")
+        marker.unlink()  # 合并后在主仓库复跑验收会失败
+
+        with self.assertRaises(SystemExit) as cm:
+            foreman.main(["merge", "T-001", "--repo", str(self.root)])
+        self.assertNotEqual(cm.exception.code, 0, "合并后验收失败必须非零退出")
+        task = self.repo.load_task("T-001")
+        self.assertEqual(task["status"], "merge_ready", "验收失败不得推进到 completed")
+        log = " ".join(x["detail"] for x in task["log"])
+        self.assertIn("合并后复跑验收失败", log)
+        merged = subprocess.run(["git", "log", "--oneline", "-1"], cwd=self.root,
+                                capture_output=True, text=True).stdout
+        self.assertIn("Merge foreman/T-001", merged, "合并提交应已存在（人工决定 revert）")
+
 
 
 class TestAgentDetection(unittest.TestCase):

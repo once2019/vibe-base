@@ -40,6 +40,17 @@ class TestScaffoldFileFilter(unittest.TestCase):
             for f in drop:
                 self.assertFalse(scaffold.is_scaffold_file(f), f)
 
+    def test_skipped_asset_files_reports_dotfiles(self) -> None:
+        """点文件被过滤时必须能被报告出来，否则将来放 .editorconfig 会静默失效。"""
+        sys.path.insert(0, str(SCRIPT.parent))
+        import init_vibe_project as scaffold
+        known = {p.name for p in scaffold.skipped_asset_files()}
+        self.assertNotIn("foreman.py", known)
+        for p in scaffold.skipped_asset_files():
+            self.assertFalse(scaffold.is_scaffold_file(p))
+            self.assertFalse(any(x in p.parts for x in ("__pycache__", ".ruff_cache")),
+                             f"缓存不该出现在报告里：{p}")
+
     def test_copy_scope_excludes_caches(self) -> None:
         """守卫：复制范围里不许出现缓存（曾因在 assets/scripts 里跑 ruff 而把 .ruff_cache 发进项目）。"""
         sys.path.insert(0, str(SCRIPT.parent))
