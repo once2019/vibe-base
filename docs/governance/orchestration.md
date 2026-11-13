@@ -29,7 +29,7 @@ python3 $F report T-001             # 竣工单 → docs/progress/（入库）
 ## 角色与权限
 
 - **主管** = 人类直接对话的会话（唯一）。可跑控制面命令（task / dispatch / events / reply / ask / review / merge / report）。
-- **worker** = `dispatch` 拉起的子 agent（收到 `[FOREMAN:*]` 消息或读到 `running` 的派工单）。只实现、只上报；跑控制面命令会被代码拒绝。
+- **worker** = `dispatch` 拉起的子 agent（收到 `[FOREMAN:*]` 消息或读到 `running` 的派工单）。只实现、只上报；Orca 模式下跑控制面命令会被代码拒绝（hcom 模式没有这层判定，靠派工单红线约束）。
 - 主管不写业务代码；worker 不做决策、不碰合并权、不 push。
 
 ## 决策档位（只有三个名字，见 AGENTS.md §3）
