@@ -27,7 +27,7 @@
 - 追补二：hcom 名字撞线防护（默认名带仓库名 + doctor 两条检查 + 撞名自动加哈希 + tag 带项目前缀），
   审查后修掉前缀比较误判、tag 未随名字加哈希、模板漂移静默跳过、工具缓存被复制进项目；
   第二轮整体审查：版本声明改 3.9+、SKILL.md 数字对齐、镜像不变量加测试、merge 后验收失败分支补测、删死代码；
-  另加 worker 自审（派工单固定段 + 启动 prompt 第 3 步），测试 115 项
+  另加 worker 自审与主管复核统一到 code-review 五轴 + 反证 + 严重度，测试 115 项
 - 收口：编排附属 3 份从 design/ 挪进 governance/；`governance-retrospective.md` 拆解——8 问与再复盘信号并入
   `governance-review.md`，证据链只留本仓库 design/，assets/docs/design/ 只剩占位 README
 - 验证：79 测试全绿（含变异实验）、双跑幂等、md5 镜像一致（详见 progress 文件）

@@ -289,6 +289,12 @@ class TestInitAndTask(TempGitRepoMixin):
         self.assertIn("git diff master...HEAD", brief)
         for item in ("范围：", "验收：", "无跳过：", "无密钥："):
             self.assertIn(item, brief)
+        for axis in ("正确性：", "可读性：", "架构：", "安全：", "性能："):
+            self.assertIn(axis, brief, f"自审缺{axis[:-1]}轴")
+        self.assertIn("反证一次", brief)
+        self.assertIn("仍然全绿，说明缺测试", brief)
+        for level in ("阻断", "必须改", "建议", "备查"):
+            self.assertIn(level, brief)
         self.assertIn("不采信自报", brief)
         self.assertEqual(foreman.main(["task", "new", "--repo", str(self.root), "--title", "第二个"]), 0)
         self.assertEqual(self.repo.load_task("T-002")["status"], "pending")
@@ -326,7 +332,9 @@ class TestDispatch(TempGitRepoMixin):
         self.assertIn("D-001", prompt)
         self.assertIn("brief.md", prompt)
         self.assertIn("发 DONE 之前先自审", prompt)
-        self.assertIn("自审四项结论", prompt)
+        self.assertIn("五轴", prompt)
+        self.assertIn("反证", prompt)
+        self.assertIn("标严重度", prompt)
 
     def test_dispatch_refuses_duplicate_tree(self) -> None:
         self.full_task()
@@ -391,6 +399,10 @@ class TestEventFlow(TempGitRepoMixin):
         task = self.repo.load_task("T-001")
         self.assertEqual(task["status"], "merge_ready")
         self.assertTrue((self.repo.task_dir("T-001") / "evidence" / "acceptance-D-001.log").exists())
+        # 自动项之外必须给出人工复核口径：五轴、反证、严重度
+        items = " ".join(task["review"]["manual_items"])
+        for kw in ("五轴读 diff", "反证一次", "严重度", "逐个提交核对"):
+            self.assertIn(kw, items)
 
         self.assertEqual(foreman.main(["merge", "T-001", "--repo", str(self.root)]), 0)
         task = self.repo.load_task("T-001")  # 归档后仍可读
