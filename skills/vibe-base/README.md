@@ -156,6 +156,18 @@ cp -r skills/vibe-base ~/.codex/skills/
 
 模板在真实项目实战一周（54 条决策）后做了一轮治理复盘：8 个反模式（入口膨胀、压行不压量、规则相抵、决策无索引、Ask-first 散落、易腐运行态、bootstrap 膨胀、不可测触发）各有实测证据与改法，已全部固化进模板本体。证据链见本技能维护仓库的 `docs/design/governance-retrospective.md`；自查 8 问与再复盘信号已并入项目 `docs/governance/governance-review.md`（唯一正本）。
 
+## 维护这个模板
+
+正本是 `skills/vibe-base/assets/`；根目录同名文件是它的镜像（`docs/design/README.md` 例外：根=实况行、模板=占位行；`docs/design/governance-retrospective.md` 只在根，属维护记录）。改完逐项验证：
+
+```bash
+python3 -m unittest discover -s tests          # 控制面回归（仓库根）
+python3 skills/vibe-base/scripts/init_vibe_project.py /tmp/tpl-a   # 脚手架双跑：首跑 N 新建、复跑 0 新建
+md5sum AGENTS.md skills/vibe-base/assets/AGENTS.md                 # 镜像逐文件对照
+```
+
+打包 `skills/vibe-base.zip` 后上传属 Ask-first。改 `scripts/foreman.py` 须同步根目录镜像并复跑回归。
+
 ## 这个模板不做什么
 
 不规定技术栈，不替你写代码，不保证 Agent 不出错。它只解决"人和 Agent 如何跨会话协作"这一层：记忆不丢、决策可查、规则唯一、验证留证、沟通无歧义。代码质量由你的评审把关，这是红线里唯一不能被自动化替代的部分。
