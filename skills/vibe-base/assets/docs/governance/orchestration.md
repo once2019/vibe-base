@@ -1,14 +1,17 @@
 # 执行编排细则（规划与实施分离）
 
 > 触发：人类说"用规划与实施分离把 X 落地 / 派 worker 去做 / 并行推进这几件事"。
-> **不说就不启用**：不派工、不探测编排通道、不派生 agent。`.vibe/` 空骨架随 init 备好，目录存在不等于启用。
+> **不说就不启用**：休眠期不派工、不探测编排通道、不派生 agent（`.vibe/` 空骨架随 init 备好，目录存在不等于启用）。
+> 说了就启用。并行推进多个任务是常规用法，一次只跑一个只是最简单的形态。
 > 红线、预算与文档归属见 AGENTS.md（§4 合并权与 Ask-first、§5 记忆归属、§6 文档落点、§7 工作流程）；本文件只写"怎么执行"。
 > 理念与"什么时候不该用"见 `docs/governance/orchestration-doctrine.md`；派工单写法见 `docs/governance/dispatch-template.md`；
 > Orca 排障见 `docs/governance/orchestration-orca.md`（仅人工介入时读）。控制面脚本：`scripts/foreman.py`（纯标准库）。
 
 ## 同机多仓并行
 
-`foreman_name` 是 hcom 的机器级寻址名，不是仓库标识。两个仓同时派工且名字相同，worker 的 `[FOREMAN:DONE] task=T-001` 会被另一个仓的主管取走，而两个仓的任务号都从 `T-001` 起。默认名带仓库目录名（init 时写进 `config.json`）；init 时若该名已被别的目录占用，自动改用 `<目录名>-<路径哈希4位>-foreman`。`tag` 默认也取目录名，且与名字成对（名字带哈希时 tag 也带），worker 名因此是 `<tag>-*`，`hcom kill tag:<tag>` 只影响本仓。改名用 `init --foreman-name <名字>`，改 tag 用 `init --tag <名字>`。`doctor` 的 `hcom-name` 查这个名字是否被别的目录占用、`hcom-address` 查本会话实际名与配置是否一致，任一条 FAIL 就不要派工。Orca 通道按 run_id 与 worker handle 寻址，不受影响。
+同机多仓并行是支持的用法，本节只讲名字怎么避免互相取走回执，不是在劝你串行。
+
+`foreman_name` 是 hcom 的机器级寻址名，不是仓库标识。两个仓同时派工且名字相同，worker 的 `[FOREMAN:DONE] task=T-001` 会被另一个仓的主管取走，而两个仓的任务号都从 `T-001` 起。默认名带仓库目录名（init 时写进 `config.json`）；init 时若该名已被别的目录占用，自动改用 `<目录名>-<路径哈希4位>-foreman`。`tag` 默认也取目录名，且与名字成对（名字带哈希时 tag 也带），worker 名因此是 `<tag>-*`，`hcom kill tag:<tag>` 只影响本仓。改名用 `init --foreman-name <名字>`，改 tag 用 `init --tag <名字>`。`doctor` 的 `hcom-name` 查这个名字是否被别的目录占用、`hcom-address` 查本会话实际名与配置是否一致，任一条 FAIL 就先别派工（按 fix 改好再派）。Orca 通道按 run_id 与 worker handle 寻址，不受影响。
 
 ## 一次闭环
 
@@ -28,11 +31,11 @@ python3 $F merge T-001              # --no-ff 合并 + 复跑验收 + 删树 + �
 python3 $F report T-001             # 竣工单 → docs/progress/（入库）
 ```
 
-每轮只做一步，然后结束回合等通道唤醒；不轮询、不 sleep。失败一律非零退出 + stderr 说明（fail-visible），不吞错重试。
+每轮只处理一步，然后结束回合等通道唤醒；不轮询、不 sleep。约束的是回合粒度，不是并行度：多个任务可以同时在跑，每个回合仍只处理一条事件。失败一律非零退出 + stderr 说明（fail-visible），不吞错重试。
 
 ## 角色与权限
 
-- **主管** = 人类直接对话的会话（唯一）。可跑控制面命令（task / dispatch / events / reply / ask / review / merge / report）。
+- **主管** = 人类直接对话的会话（每仓唯一；并行的是任务，不是主管）。可跑控制面命令（task / dispatch / events / reply / ask / review / merge / report）。
 - **worker** = `dispatch` 拉起的子 agent（收到 `[FOREMAN:*]` 消息或读到 `running` 的派工单）。只实现、只上报；Orca 模式下跑控制面命令会被代码拒绝（hcom 模式没有这层判定，靠派工单红线约束）。
 - 主管不写业务代码；worker 不做决策、不碰合并权、不 push。
 
