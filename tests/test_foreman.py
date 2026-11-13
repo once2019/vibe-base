@@ -229,6 +229,25 @@ class TestUnits(unittest.TestCase):
             self.assertIn("heartbeat", log)
             self.assertIn("Worker stopped without reporting", log)
 
+    def test_orca_rejected_delivery_is_surfaced(self) -> None:
+        """通道拒收（worker_done 缺 taskId）不能被当成非协议消息跳过，否则主管一直等到超时。"""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            repo = foreman.Repo(root)
+            msgs = [{"id": "m-1", "type": "worker_done", "from": "term_x",
+                     "subject": "Rejected worker_done: [FOREMAN:DONE] task=T-001 dispatch=D-001"}]
+            fake = root / "fake-orca-rejected"
+            fake.write_text("#!/bin/sh\necho '" + json.dumps({"ok": True, "result": {"messages": msgs}}) + "'\n")
+            make_executable(fake)
+            o = foreman.Orca(repo, {"foreman_name": "foreman"})
+            o.bin = str(fake)
+            got = o.wait_message(5)
+            self.assertNotIn("timed_out", got, "被拒的上报必须显式上报，不能算超时")
+            self.assertEqual(got["rejected"]["count"], 1)
+            self.assertIn("Rejected worker_done", got["rejected"]["subject"])
+            log = (root / ".vibe" / "logs" / "transport-skipped.log").read_text(encoding="utf-8")
+            self.assertIn("Rejected worker_done", log)
+
     def test_hcom_wait_message_timeout(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             repo = foreman.Repo(Path(td))
@@ -422,6 +441,17 @@ class TestEventFlow(TempGitRepoMixin):
         self.assertIn("## 验证方式（可复现）", body)
         self.assertIn("## 遗留问题", body)
         self.assertTrue((self.repo.archive_dir / "T-001" / "report.path").exists())
+
+    def test_report_refuses_when_not_completed(self) -> None:
+        """竣工单是归档后的事实源：未合并就写进 docs/progress/ 会被当成已完成。"""
+        self.set_event("[FOREMAN:DONE] task=T-001 dispatch=D-001\n完成")
+        self.assertEqual(self.run_events(), 0)
+        self.assertEqual(self.repo.load_task("T-001")["status"], "review")
+        with self.assertRaises(SystemExit) as cm:
+            foreman.main(["report", "T-001", "--repo", str(self.root)])
+        self.assertNotEqual(cm.exception.code, 0)
+        self.assertFalse(list((self.root / "docs" / "progress").glob("*-T-001.md")),
+                         "未 completed 不应落竣工单")
 
     def test_merge_refuses_when_not_merge_ready(self) -> None:
         with self.assertRaises(SystemExit):
@@ -701,6 +731,25 @@ class TestProtocolParsing(unittest.TestCase):
         self.assertEqual(got, [("ASK", "T-001", "D-001")])
         got2 = foreman.header_candidates("[FOREMAN:DONE] task=T-001 dispatch=D-001\n摘要")
         self.assertEqual(got2, [("DONE", "T-001", "D-001")])
+
+    def test_orca_terminal_sender_is_not_flagged(self):
+        """Orca 的 worker 消息 from 是终端句柄，不是 dispatch id：不能误报串线。"""
+        from pathlib import Path
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+        import foreman
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp, True)
+        repo = foreman.Repo(Path(tmp))
+        cfg = dict(repo.load_or_default_config(), transport="orca")
+        foreman.write_json(repo.config_path, cfg)
+        task = {"id": "T-001", "title": "x", "status": "running", "attempts": 1, "log": [],
+                "dispatches": [{"id": "D-001", "worker_handle": "dispatch:ctx_1"}]}
+        foreman.write_json(repo.task_dir("T-001") / "task.json", task)
+        res = foreman.apply_protocol_event(repo, cfg, {
+            "id": "e1", "instance": "term_abc", "data": {
+                "text": "[FOREMAN:DONE] task=T-001 dispatch=D-001\n完成"}})
+        self.assertNotIn("sender_unexpected", res)
+        self.assertEqual(res["task_status"], "review")
 
     def test_sender_outside_dispatches_is_flagged(self):
         """协议头权威，但发送者不在派工记录里要留痕：这是名字撞线的残留信号。"""

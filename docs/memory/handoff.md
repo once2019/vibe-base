@@ -35,9 +35,8 @@
 
 ## 未完成工作清单
 
-- [ ] 人工重装技能目录并删除旧的 `~/.pi/agent/skills/vibe-foreman`（安装属人工动作）
-- [ ] 真实通道 E2E：dispatch → worker → DONE → review → merge → report 全链路
-- [ ] `skills/vibe-base.zip` 重打包（上传属 Ask-first）
+- [x] **真实通道 E2E 已跑通**（Orca，`/tmp/e2e-skill`，2026-11-13）：两轮全链路
+      dispatch → worker(pi) → DONE → review → merge → report；暴露并修掉 4 个问题（见 progress）
 - [ ] **storyboard-maker 已冻结**（人类指令 2026-11-13）：技能完善前不再逐次同步，之后一次性整体升级。
       冻结点 `acaf06e`（未 push，`cnb/main..master` 251 个提交，其中含他人会话的 T-004 未跟踪竣工单，勿动）
 - [x] `~/storyboard-maker` 接入完成并提交（`4db5885`）：控制面先过一遍标准 lint/类型
@@ -51,7 +50,8 @@
 ## 新会话必须遵守的约束
 
 - 编排块的条文正本是 `docs/governance/orchestration.md`（与 assets 成对）；不得另建第二份编排说明
-- 根目录与 `skills/vibe-base/assets/` 成对镜像；例外：`docs/design/README.md` 根=实况行、模板=占位行；
-  `docs/design/governance-retrospective.md` 只在根（技能维护记录，不随 init 分发）
+- 正本只有 `skills/vibe-base/assets/`；根侧同名文件是**符号链接**（一份实体）。例外是 5 个状态类文件
+  （memory/context、memory/handoff、decisions/README、specs/README、design/README）：根=实况、模板=占位。
+  `docs/design/governance-retrospective.md` 只在根（维护记录，不随 init 分发）
 - 状态变更只经 `scripts/foreman.py`，不手改 `.vibe/` 下的 task.json 与 evidence
 - 改 `foreman.py` 后必须跑仓库根 `python3 -m unittest discover -s tests`（`tests/` 属本仓库，不随技能分发）

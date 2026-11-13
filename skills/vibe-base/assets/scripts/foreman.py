@@ -884,6 +884,17 @@ class Orca(Transport):
         def as_text(msg: dict) -> str:
             return "\n".join(x for x in (msg.get("subject"), msg.get("body")) if x)
 
+        # 通道拒收（例如 worker_done 缺 taskId）的 subject 会被加上 "Rejected " 前缀，
+        # 协议头正则匹配不到；当成普通非协议消息跳过会让主管一直等到超时。
+        rejected = [m for m in msgs if str(m.get("subject") or "").startswith("Rejected ")]
+        if rejected:
+            self._log_skipped(rejected)
+            m = rejected[0]
+            return {"rejected": {"id": m.get("id") or m.get("messageId"),
+                                 "from": m.get("from"),
+                                 "subject": str(m.get("subject") or "")[:200],
+                                 "count": len(rejected)}}
+
         for i, msg in enumerate(msgs):
             text = as_text(msg)
             if header_candidates(text):
@@ -1030,12 +1041,13 @@ def worker_prompt(cfg: dict, task: dict, dispatch: dict, brief_path: Path) -> st
             f"4. 需要裁决时运行：orca orchestration send --to run:{run_id} --subject "
             f"'[FOREMAN:ASK] task={task['id']} dispatch={dispatch['id']}' "
             f"--body '<问题+选项+推荐项>'，然后结束回合等回复。\n"
-            f"5. 自审通过后上报完成：orca orchestration send --to run:{run_id} --type worker_done "
-            f"--outcome succeeded --subject '[FOREMAN:DONE] task={task['id']} dispatch={dispatch['id']}' "
+            f"5. 自审通过后上报完成。Orca 的 worker_done 必须带 taskId，漏了会被拒（你会看到 "
+            f"'Rejected worker_done'，主管侧收不到任何东西）：先跑 `orca orchestration worker-list --json`，"
+            f"取 dispatchId 与你启动时一致的那条记录的 taskId，再发："
+            f"orca orchestration send --to run:{run_id} --type worker_done --outcome succeeded "
+            f"--task-id <taskId> --subject '[FOREMAN:DONE] task={task['id']} dispatch={dispatch['id']}' "
             f"--body '<摘要+改动文件+自审四项结论+验证命令与输出+分支提交>'，然后停止。"
-            f"（放弃任务时用 --outcome failed。若 Orca 回 'worker_done requires taskId'，"
-            f"用 `orca orchestration worker-list --json` 查本次 dispatch 的 taskId，"
-            f"再补 --task-id <taskId> 重发同一封，不要改正文。）\n"
+            f"（放弃任务时 --outcome failed。万一仍被拒：同一条命令补 --task-id 重发，不要改正文。）\n"
             f"6. 卡住时发 --subject '[FOREMAN:ESCALATE] task={task['id']} dispatch={dispatch['id']}' "
             f"--body '<已尝试方案+阻塞点>'，然后停止。\n"
             "Orca 的协议头放在 --subject，只在协议头里写 task/dispatch，正文放 --body。\n"
@@ -1527,9 +1539,11 @@ def apply_protocol_event(repo: Repo, cfg: dict, event: dict) -> dict:
     dref = f"{dispatch_id}（来自 {sender}）"
     result: dict = {"event_id": event.get("id"), "type": ptype, "task": task_id,
                     "dispatch": dispatch_id, "from": sender}
-    # 发送者不在本任务的派工记录里：名字撞线的残留信号（协议头仍是权威，只记不拦）
+    # 发送者不在本任务的派工记录里：名字撞线的残留信号（协议头仍是权威，只记不拦）。
+    # Orca 通道的 from 是终端句柄（term_*）而非 dispatch id，那是正常的，不算异常。
     known = sorted({d.get("worker_handle") for d in task.get("dispatches", []) if d.get("worker_handle")})
-    if known and sender not in known:
+    orca_terminal = cfg.get("transport") == "orca" and str(sender).startswith("term_")
+    if known and sender not in known and not orca_terminal:
         result["sender_unexpected"] = known
         repo.log_task(task, task["status"],
                       f"消息来自 {sender}，不在本任务派工记录（{', '.join(known)}）里："
@@ -1593,6 +1607,12 @@ def cmd_events(args: argparse.Namespace) -> int:
         emit(args, {"timed_out": True, "skipped": skipped},
              "等待超时，无匹配协议消息" + hint)
         return EXIT_ERROR
+    if event.get("rejected"):
+        r = event["rejected"]
+        fail(f"通道拒收了 worker 的上报（{r['subject']}）：{r['count']} 条。"
+             "多半是 worker_done 缺 --task-id，任务仍停在原状态。"
+             "给 worker 发 ANSWER 让它补 --task-id 重发，或 task abandon 后重派；"
+             "排查细节见 docs/governance/orchestration-orca.md", EXIT_ERROR)
     extra = event.get("batch_extra") or []
     result = apply_protocol_event(repo, cfg, event)
     if extra:
@@ -1914,6 +1934,10 @@ def cmd_merge(args: argparse.Namespace) -> int:
 def cmd_report(args: argparse.Namespace) -> int:
     repo = Repo(Path(args.repo))
     task = repo.load_task(args.task_id)
+    if task["status"] != "completed":
+        # 竣工单是归档后的事实源：未合并就写进 docs/progress/ 会被当成已完成
+        fail(f"任务 {task['id']} 状态为 {task['status']}，只有 completed 才能出竣工单；"
+             f"先 merge，或用 task show 看过程态")
     d = repo.find_task_dir(task["id"])
     merge = task.get("merge") or {}
     review = task.get("review") or {}
