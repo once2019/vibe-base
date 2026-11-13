@@ -38,9 +38,8 @@ init 会把编排能力一起装进项目，形态是「文档 + 控制面脚本
 ## 安装
 
 ```bash
-mkdir -p ~/.pi/agent/skills ~/.codex/skills
+mkdir -p ~/.pi/agent/skills 
 cp -r skills/vibe-base ~/.pi/agent/skills/
-cp -r skills/vibe-base ~/.codex/skills/
 ```
 
 无第三方依赖（Python 3.8+ 标准库）。回归测试不在技能包内，由维护本技能的仓库运行（仓库根 `tests/`，`python3 -m unittest discover -s tests`）。

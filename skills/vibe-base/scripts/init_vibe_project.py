@@ -5,7 +5,7 @@
 运行后扫描骨架文件（含已存在的，格式示例文件除外）中的 `<...>` 占位符并按 文件:行 报告，
 作为回填进度参考；复跑可查看剩余待回填项。
 退出码：0=流程完成（含全部跳过）；2=skill assets 缺失或为空。
-.vibe/ 过程态骨架随骨架一起建好：在 git 仓库里调用随骨架落地的 scripts/foreman.py init（幂等）。
+.vibe/ 过程态骨架随初始化一并建好：在 git 仓库里调用刚落地的 scripts/foreman.py init（幂等）。
 
 """
 import argparse
@@ -93,6 +93,24 @@ def scan_placeholders(target: Path, created):
     return findings
 
 
+CONTROL_SCRIPT = "scripts/foreman.py"
+
+
+def drift_note(target: Path, skipped: list[Path]) -> str:
+    """已存在但与模板不同的控制面脚本：不覆盖，但要提示，否则项目会长期跑旧版。"""
+    if not any(p.as_posix() == str(target / CONTROL_SCRIPT) for p in skipped):
+        return ""
+    src, dst = ASSETS_DIR / CONTROL_SCRIPT, target / CONTROL_SCRIPT
+    try:
+        if src.read_bytes() == dst.read_bytes():
+            return ""
+        version = re.search(r'^VERSION = "([^"]+)"', src.read_text(encoding="utf-8"), re.M)
+    except OSError:
+        return ""
+    tag = f"模板版本 {version.group(1)}，" if version else ""
+    return f"!! {CONTROL_SCRIPT} 与技能模板不一致（{tag}未覆盖）：需要更新时用 --force 或手工替换"
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="初始化 vibe coding 治理骨架（AGENTS.md + docs/）"
@@ -129,8 +147,12 @@ def main():
     else:
         print("无待填占位符。")
 
+    drift = drift_note(target, skipped)
+    if drift:
+        print(drift)
+
     ok, note = bootstrap_state(target)
-    print(("编排骨架：" if ok else "!! ") + note)
+    print(note if ok else f"!! {note}")
 
     print("下一步：骨架生成完毕。占位符 <...> 无需当场追问，由 Agent 在后续开发中获知实际信息时主动回填；上述清单即回填进度参考。")
     return 0

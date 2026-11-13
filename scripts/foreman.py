@@ -27,6 +27,7 @@ VERSION = "1.0.0"  # 融入 vibe-base 的契约版本：过程态 .vibe/、docs 
 
 EXIT_OK = 0
 EXIT_ERROR = 1
+HCOM_LIST_TIMEOUT = 60  # hcom list 的等待上限：doctor 与 init 共用，别各写一个
 
 HEADER_RE = re.compile(r"^\[FOREMAN:([A-Z_]+)\]\s+task=(\S+)\s+dispatch=(\S+)", re.MULTILINE)
 
@@ -223,24 +224,42 @@ def hcom_instances(bin_name: str, cwd: Path, timeout: int = 120) -> list[dict] |
     return [x for x in data if isinstance(x, dict)] if isinstance(data, list) else []
 
 
-def foreman_name_candidates(repo: Repo) -> list[str]:
-    """默认名 → 路径短哈希名：同一目录永远同一名字，同名目录靠路径区分。"""
+def is_own_dir(directory: object, root: Path) -> bool:
+    """实例目录是否属于本仓：按路径边界判断。
+
+    不能用 `str(directory).startswith(root)`：`/repo/api-extra` 会以 `/repo/api` 开头，
+    兄弟目录的实例被当成自家的，撞名避让与 doctor 就同时失效。"""
+    raw = str(directory or "").strip()
+    if not raw:
+        return False
+    try:
+        return Path(raw).resolve().is_relative_to(root)
+    except (OSError, ValueError):
+        return False
+
+
+def foreman_name_pairs(repo: Repo) -> list[tuple[str, str]]:
+    """(主管名, 配套 tag)：同一目录永远同一对，同名目录靠路径短哈希区分。
+
+    tag 跟着名字一起加哈希：否则两个同名目录的仓仍共用 tag，`hcom kill tag:<tag>`
+    会跨仓杀，worker 名（`<tag>-*`）也可能重名。"""
     slug = slugify(repo.root.name)
     digest = hashlib.sha1(str(repo.root).encode("utf-8")).hexdigest()
-    return [f"{slug}-foreman", f"{slug}-{digest[:4]}-foreman", f"{slug}-{digest[:8]}-foreman"]
+    return [(f"{slug}-foreman", slug),
+            (f"{slug}-{digest[:4]}-foreman", f"{slug}-{digest[:4]}"),
+            (f"{slug}-{digest[:8]}-foreman", f"{slug}-{digest[:8]}")]
 
 
-def pick_foreman_name(repo: Repo, bin_name: str = "hcom") -> str:
-    """挑一个没被别的仓库占用的主管名；取不到实例表就退回默认名（doctor 会再查）。"""
-    cands = foreman_name_candidates(repo)
+def pick_foreman_names(repo: Repo, bin_name: str = "hcom") -> tuple[str, str]:
+    """挑没被别的仓占用的 (主管名, tag)；取不到实例表就退回默认，doctor 会再查。"""
+    pairs = foreman_name_pairs(repo)
     if shutil.which(bin_name) is None:
-        return cands[0]
-    items = hcom_instances(bin_name, repo.root, timeout=60)
+        return pairs[0]
+    items = hcom_instances(bin_name, repo.root, timeout=HCOM_LIST_TIMEOUT)
     if items is None:
-        return cands[0]
-    root = str(repo.root)
-    taken = {x.get("name") for x in items if not str(x.get("directory") or "").startswith(root)}
-    return next((c for c in cands if c not in taken), cands[-1])
+        return pairs[0]
+    taken = {x.get("name") for x in items if not is_own_dir(x.get("directory"), repo.root)}
+    return next((p for p in pairs if p[0] not in taken), pairs[-1])
 
 
 def append_log(path: Path, text: str) -> None:
@@ -701,9 +720,8 @@ class Hcom(Transport):
             return {"name": "hcom-name", "ok": False,
                     "detail": f"hcom list 取不到实例表，无法确认 {name} 是否被别的仓占用",
                     "fix": "手工运行 hcom list --json 核对"}
-        root = str(self.repo.root)
-        foreign = [x for x in items if isinstance(x, dict) and x.get("name") == name
-                   and not str(x.get("directory") or "").startswith(root)]
+        foreign = [x for x in items if x.get("name") == name
+                   and not is_own_dir(x.get("directory"), self.repo.root)]
         if not foreign:
             return {"name": "hcom-name", "ok": True, "detail": f"{name} 未被其它仓占用", "fix": ""}
         where = foreign[0].get("directory")
@@ -1173,9 +1191,13 @@ def cmd_init(args: argparse.Namespace) -> int:
 
     before = read_json(repo.config_path) if repo.config_path.exists() else None
     cfg = repo.load_or_default_config()
-    if before is None and not args.foreman_name:
+    if before is None:
         # 只在新仓库上挑名字：已有配置不静默改名（改错更难查，doctor 会提示）
-        cfg["foreman_name"] = pick_foreman_name(repo, cfg.get("hcom_bin", "hcom"))
+        picked_name, picked_tag = pick_foreman_names(repo, cfg.get("hcom_bin", "hcom"))
+        if not args.foreman_name:
+            cfg["foreman_name"] = picked_name
+        if not args.tag:
+            cfg["tag"] = picked_tag
     if args.tag:
         cfg["tag"] = args.tag
     if args.base:
@@ -1473,6 +1495,13 @@ def apply_protocol_event(repo: Repo, cfg: dict, event: dict) -> dict:
     dref = f"{dispatch_id}（来自 {sender}）"
     result: dict = {"event_id": event.get("id"), "type": ptype, "task": task_id,
                     "dispatch": dispatch_id, "from": sender}
+    # 发送者不在本任务的派工记录里：名字撞线的残留信号（协议头仍是权威，只记不拦）
+    known = sorted({d.get("worker_handle") for d in task.get("dispatches", []) if d.get("worker_handle")})
+    if known and sender not in known:
+        result["sender_unexpected"] = known
+        repo.log_task(task, task["status"],
+                      f"消息来自 {sender}，不在本任务派工记录（{', '.join(known)}）里："
+                      f"疑跨仓串线，已按协议头 {task_id}/{dispatch_id} 处理")
 
     if ptype == "ASK":
         repo.set_status(task, "waiting_answer")
@@ -1539,6 +1568,9 @@ def cmd_events(args: argparse.Namespace) -> int:
     emit(args, result,
          f"[{result['type']}] {result['task']}/{result['dispatch']} 来自 {result['from']} → 任务状态 {result['task_status']}"
          + (f"\n建议：{result['hint']}" if result.get("hint") else "")
+         + (f"\n注意：消息来自 {result['from']}，不在本任务派工记录（"
+            f"{', '.join(result['sender_unexpected'])}）里：疑跨仓串线，核对协议头 task/dispatch"
+            if result.get("sender_unexpected") else "")
          + (f"\n注意：同批还有 {len(result['batch_extra'])} 条消息未处理"
             f"（{', '.join(str(x) for x in result['batch_extra'])}），全文已留档 "
             f"{repo.logs_dir / 'batch-unhandled.log'}" if result.get("batch_extra") else ""))

@@ -676,6 +676,27 @@ class TestProtocolParsing(unittest.TestCase):
         got2 = foreman.parse_header("[FOREMAN:DONE] task=T-001 dispatch=D-001\n摘要")
         self.assertEqual(got2, ("DONE", "T-001", "D-001"))
 
+    def test_sender_outside_dispatches_is_flagged(self):
+        """协议头权威，但发送者不在派工记录里要留痕：这是名字撞线的残留信号。"""
+        from pathlib import Path
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+        import foreman
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp, True)
+        repo = foreman.Repo(Path(tmp))
+        cfg = repo.load_or_default_config()
+        foreman.write_json(repo.config_path, cfg)
+        task = {"id": "T-001", "title": "x", "status": "running", "attempts": 1, "log": [],
+                "dispatches": [{"id": "D-001", "worker_handle": "w-T-001"}]}
+        foreman.write_json(repo.task_dir("T-001") / "task.json", task)
+        res = foreman.apply_protocol_event(repo, cfg, {
+            "id": "e1", "instance": "w-other-repo", "data": {
+                "text": "[FOREMAN:DONE] task=T-001 dispatch=D-001\n完成"}})
+        self.assertEqual(res["sender_unexpected"], ["w-T-001"])
+        log = " ".join(x["detail"] for x in repo.load_task("T-001")["log"])
+        self.assertIn("疑跨仓串线", log)
+        self.assertEqual(res["task_status"], "review", "仍按协议头处理，不做拦截")
+
     def test_unparsed_message_saved_before_failing(self):
         from pathlib import Path
         sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
@@ -952,6 +973,12 @@ class TestDoctorHcomName(TempGitRepoMixin):
         self.assertIn("/tmp/other-repo", checks["hcom-name"]["detail"])
         self.assertIn("--foreman-name", checks["hcom-name"]["fix"])
 
+    def test_sibling_dir_prefix_is_foreign(self) -> None:
+        """`/x/api-extra` 前缀相同但不是本仓：doctor 必须报占用。"""
+        name = self.repo.config()["foreman_name"]
+        self._set_list([{"name": name, "directory": f"{self.root}-extra"}])
+        self.assertFalse(self._checks()["hcom-name"]["ok"])
+
     def test_name_in_this_repo_passes(self) -> None:
         name = self.repo.config()["foreman_name"]
         self._set_list([{"name": name, "directory": str(self.root)}])
@@ -983,48 +1010,73 @@ class TestDoctorHcomName(TempGitRepoMixin):
 
 
 class TestForemanNamePicking(TempGitRepoMixin):
-    """撞名自动加路径短哈希：同一目录永远同名，同名目录靠路径区分。"""
+    """撞名自动加路径短哈希，名字与 tag 成对：同一目录永远同一对，同名目录靠路径区分。"""
 
-    def _set_list(self, items: list[dict]) -> None:
-        os.environ["FAKE_HCOM_LIST"] = json.dumps(items)
+    def _set_list(self, items: list[dict] | str) -> None:
+        os.environ["FAKE_HCOM_LIST"] = items if isinstance(items, str) else json.dumps(items)
         self.addCleanup(os.environ.pop, "FAKE_HCOM_LIST", None)
+
+    def _slug(self) -> str:
+        return foreman.slugify(self.root.name)
 
     def test_free_name_uses_repo_slug(self) -> None:
         self._set_list([])
-        self.assertEqual(foreman.pick_foreman_name(self.repo, str(FIXTURE_HCOM)),
-                         foreman.slugify(self.root.name) + "-foreman")
+        self.assertEqual(foreman.pick_foreman_names(self.repo, str(FIXTURE_HCOM)),
+                         (f"{self._slug()}-foreman", self._slug()))
 
     def test_name_taken_by_other_repo_gets_hash(self) -> None:
-        base = foreman.slugify(self.root.name) + "-foreman"
+        base = f"{self._slug()}-foreman"
         self._set_list([{"name": base, "directory": "/tmp/other-repo"}])
-        picked = foreman.pick_foreman_name(self.repo, str(FIXTURE_HCOM))
-        self.assertNotEqual(picked, base)
-        self.assertTrue(picked.endswith("-foreman"), picked)
-        self.assertRegex(picked, r"^.+-[0-9a-f]{4}-foreman$")
+        name, tag = foreman.pick_foreman_names(self.repo, str(FIXTURE_HCOM))
+        self.assertRegex(name, r"^.+\-[0-9a-f]{4}\-foreman$")
+        self.assertRegex(tag, r"^.+\-[0-9a-f]{4}$", "tag 必须跟着名字一起加哈希，否则 kill tag: 会跨仓")
+        self.assertEqual(name, f"{tag}-foreman")
+
+    def test_sibling_dir_prefix_is_not_own(self) -> None:
+        """`/x/api-extra` 不是 `/x/api`：前缀相同的兄弟目录也不能算自家。"""
+        base = f"{self._slug()}-foreman"
+        self._set_list([{"name": base, "directory": f"{self.root}-extra"}])
+        self.assertNotEqual(foreman.pick_foreman_names(self.repo, str(FIXTURE_HCOM))[0], base,
+                            "兄弟目录占用时仍须避让")
 
     def test_name_taken_by_own_repo_keeps_plain(self) -> None:
-        base = foreman.slugify(self.root.name) + "-foreman"
+        base = f"{self._slug()}-foreman"
         self._set_list([{"name": base, "directory": str(self.root)}])
-        self.assertEqual(foreman.pick_foreman_name(self.repo, str(FIXTURE_HCOM)), base)
+        self.assertEqual(foreman.pick_foreman_names(self.repo, str(FIXTURE_HCOM))[0], base)
+
+    def test_own_worktree_counts_as_own(self) -> None:
+        base = f"{self._slug()}-foreman"
+        self._set_list([{"name": base, "directory": str(self.root / ".vibe" / "worktrees" / "T-001")}])
+        self.assertEqual(foreman.pick_foreman_names(self.repo, str(FIXTURE_HCOM))[0], base)
+
+    def test_instances_dict_wrapper_is_parsed(self) -> None:
+        base = f"{self._slug()}-foreman"
+        self._set_list(json.dumps({"instances": [{"name": base, "directory": "/tmp/other-repo"}]}))
+        self.assertNotEqual(foreman.pick_foreman_names(self.repo, str(FIXTURE_HCOM))[0], base)
+
+    def test_missing_hcom_falls_back_to_plain(self) -> None:
+        name, tag = foreman.pick_foreman_names(self.repo, "definitely-not-a-real-bin-xyz")
+        self.assertEqual((name, tag), (f"{self._slug()}-foreman", self._slug()))
 
     def test_two_same_named_dirs_differ(self) -> None:
         with tempfile.TemporaryDirectory() as a, tempfile.TemporaryDirectory() as b:
             ra, rb = Path(a) / "api", Path(b) / "api"
             ra.mkdir(), rb.mkdir()
-            self.assertNotEqual(foreman.foreman_name_candidates(foreman.Repo(ra))[1],
-                                foreman.foreman_name_candidates(foreman.Repo(rb))[1])
+            self.assertNotEqual(foreman.foreman_name_pairs(foreman.Repo(ra))[1],
+                                foreman.foreman_name_pairs(foreman.Repo(rb))[1])
 
-    def test_init_picks_hashed_name_on_collision(self) -> None:
+    def test_init_picks_hashed_pair_on_collision(self) -> None:
         """新仓库 init 自动避让：假 hcom 放到 PATH 最前，模拟没有自定义 hcom_bin 的首跑。"""
-        base = foreman.slugify(self.root.name) + "-foreman"
+        base = f"{self._slug()}-foreman"
         self._set_list([{"name": base, "directory": "/tmp/other-repo"}])
         old_path = os.environ["PATH"]
         os.environ["PATH"] = f"{FIXTURE_HCOM.parent}{os.pathsep}{old_path}"
         self.addCleanup(os.environ.__setitem__, "PATH", old_path)
         self.repo.config_path.unlink()
         self.assertEqual(foreman.main(["init", "--repo", str(self.root)]), 0)
-        picked = foreman.json.loads(self.repo.config_path.read_text(encoding="utf-8"))["foreman_name"]
-        self.assertRegex(picked, r"^.+-[0-9a-f]{4}-foreman$")
+        cfg = foreman.json.loads(self.repo.config_path.read_text(encoding="utf-8"))
+        self.assertRegex(cfg["foreman_name"], r"^.+\-[0-9a-f]{4}\-foreman$")
+        self.assertRegex(cfg["tag"], r"^.+\-[0-9a-f]{4}$")
 
     def test_init_keeps_existing_name(self) -> None:
         before = foreman.json.loads(self.repo.config_path.read_text(encoding="utf-8"))["foreman_name"]

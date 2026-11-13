@@ -51,6 +51,25 @@ class TestInitScaffold(unittest.TestCase):
         self.assertFalse((self.root / ".vibe").exists())
         self.assertIn("还不是 git 仓库", proc.stdout)
 
+    def test_stale_control_script_is_reported(self) -> None:
+        """项目副本与模板不同：不覆盖，但必须提示，否则会长期跑旧控制面。"""
+        git(self.root, "init", "-q", "-b", "main")
+        git(self.root, "commit", "-q", "--allow-empty", "-m", "init")
+        self.assertEqual(run_script(self.root).returncode, 0)
+        (self.root / "scripts" / "foreman.py").write_text("# 旧版控制面\n", encoding="utf-8")
+
+        proc = run_script(self.root)
+        self.assertIn("新建 0 个文件", proc.stdout)
+        self.assertIn("与技能模板不一致", proc.stdout)
+        self.assertEqual((self.root / "scripts" / "foreman.py").read_text(encoding="utf-8"),
+                         "# 旧版控制面\n", "不覆盖既有副本")
+
+    def test_identical_control_script_is_silent(self) -> None:
+        git(self.root, "init", "-q", "-b", "main")
+        git(self.root, "commit", "-q", "--allow-empty", "-m", "init")
+        self.assertEqual(run_script(self.root).returncode, 0)
+        self.assertNotIn("与技能模板不一致", run_script(self.root).stdout)
+
     def test_rerun_is_idempotent(self) -> None:
         git(self.root, "init", "-q", "-b", "main")
         git(self.root, "commit", "-q", "--allow-empty", "-m", "init")

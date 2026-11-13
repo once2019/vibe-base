@@ -8,7 +8,7 @@
 
 ## 同机多仓并行
 
-`foreman_name` 是 hcom 的机器级寻址名，不是仓库标识。两个仓同时派工且名字相同，worker 的 `[FOREMAN:DONE] task=T-001` 会被另一个仓的主管取走，而两个仓的任务号都从 `T-001` 起。默认名带仓库目录名（init 时写进 `config.json`）；init 时若该名已被别的目录占用，自动改用 `<目录名>-<路径哈希4位>-foreman`。`tag` 默认也取目录名，worker 名因此是 `<目录名>-*`，`hcom kill tag:<目录名>` 只影响本仓。改名用 `init --foreman-name <名字>`，改 tag 用 `init --tag <名字>`。`doctor` 的 `hcom-name` 查这个名字是否被别的目录占用、`hcom-address` 查本会话实际名与配置是否一致，任一条 FAIL 就不要派工。Orca 通道按 run_id 与 worker handle 寻址，不受影响。
+`foreman_name` 是 hcom 的机器级寻址名，不是仓库标识。两个仓同时派工且名字相同，worker 的 `[FOREMAN:DONE] task=T-001` 会被另一个仓的主管取走，而两个仓的任务号都从 `T-001` 起。默认名带仓库目录名（init 时写进 `config.json`）；init 时若该名已被别的目录占用，自动改用 `<目录名>-<路径哈希4位>-foreman`。`tag` 默认也取目录名，且与名字成对（名字带哈希时 tag 也带），worker 名因此是 `<tag>-*`，`hcom kill tag:<tag>` 只影响本仓。改名用 `init --foreman-name <名字>`，改 tag 用 `init --tag <名字>`。`doctor` 的 `hcom-name` 查这个名字是否被别的目录占用、`hcom-address` 查本会话实际名与配置是否一致，任一条 FAIL 就不要派工。Orca 通道按 run_id 与 worker handle 寻址，不受影响。
 
 ## 一次闭环
 
