@@ -1,0 +1,60 @@
+#!/usr/bin/env python3
+"""tests/fixtures/hcom — 记录 argv 的假 hcom，模拟 2026-11-12 决策记录里的 CLI 契约。
+
+行为由环境变量控制：
+- FAKE_HCOM_LOG      argv 追加记录文件（JSON Lines），必设
+- FAKE_HCOM_EVENT    events --wait 命中时输出的 JSON 事件文件；未设则超时
+- FAKE_HCOM_LAUNCH   launch 回执 JSON 文件；未设则用默认成功回执
+"""
+
+import json
+import os
+import sys
+
+
+def main() -> int:
+    argv = sys.argv[1:]
+    log = os.environ.get("FAKE_HCOM_LOG")
+    if log:
+        with open(log, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(argv, ensure_ascii=False) + "\n")
+
+    if argv[0] == "list":
+        if argv[1:2] == ["self"]:
+            ident = {"name": "foreman", "status": "active"}
+            tool = os.environ.get("FAKE_HCOM_TOOL", "codex")
+            if tool:
+                ident["tool"] = tool
+            print(json.dumps(ident))
+            return 0
+        print("[]")
+        return 0
+
+    if argv[0] == "send":
+        print(json.dumps({"id": 123, "targets": ["x"]}))
+        return 0
+
+    if argv[0] == "events":
+        ev_file = os.environ.get("FAKE_HCOM_EVENT")
+        if ev_file:
+            print(open(ev_file, encoding="utf-8").read().strip())
+            return 0
+        print(json.dumps({"timed_out": True}))
+        return 1
+
+    if argv[0] in ("codex", "pi", "claude"):
+        launch_file = os.environ.get("FAKE_HCOM_LAUNCH")
+        if launch_file:
+            print(open(launch_file, encoding="utf-8").read().strip())
+        else:
+            print(json.dumps({"action": "launch", "launched": 1, "failed": 0,
+                              "names": ["w-T-001"], "tag": "foreman",
+                              "batch_id": "b-1", "errors": []}))
+        return 0
+
+    print(json.dumps({"error": f"fake hcom: unknown argv {argv}"}))
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -23,11 +23,22 @@ FORMAT_EXAMPLES = (
     "docs/progress/README.md",
 )
 
+# 程序文件不是模板：其中的 <...> 是代码/文档里的字面量，不参与回填扫描
+CODE_PREFIXES = ("scripts/",)
+
+# 技能自带的参考文档（随 init 发布、内容不随项目变化）：其中的 <taskId> 之类是命令字面量，不是待填项
+REFERENCE_DOCS = (
+    "docs/design/dispatch-template.md",
+    "docs/design/orchestration-doctrine.md",
+    "docs/design/orchestration-orca.md",
+)
+
 PLACEHOLDER_RE = re.compile(r"<([^<>\n]+)>")
 
 
 def collect_asset_files():
-    return sorted(p for p in ASSETS_DIR.rglob("*") if p.is_file())
+    return sorted(p for p in ASSETS_DIR.rglob("*")
+                  if p.is_file() and "__pycache__" not in p.parts and p.suffix != ".pyc")
 
 
 def copy_scaffold(target: Path, force: bool):
@@ -47,7 +58,8 @@ def scan_placeholders(target: Path, created):
     findings = []
     for dst in created:
         rel = dst.relative_to(target).as_posix()
-        if rel in FORMAT_EXAMPLES or rel.startswith(GOVERNANCE_PREFIX):
+        if (rel in FORMAT_EXAMPLES or rel in REFERENCE_DOCS
+                or rel.startswith(GOVERNANCE_PREFIX) or rel.startswith(CODE_PREFIXES)):
             continue
         for lineno, line in enumerate(dst.read_text(encoding="utf-8").splitlines(), 1):
             for m in PLACEHOLDER_RE.finditer(line):

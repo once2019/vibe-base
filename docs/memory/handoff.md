@@ -4,35 +4,40 @@
 > 新会话第一件事=读 `docs/memory/context.md` + 本文件，再查 `docs/decisions/README.md` 索引最近 3 条。
 > 规则与预算见 AGENTS.md §5（交接知识/运行态分区｜≤60 行且单行 ≤150 字符｜失效运行态条目更新时清除）。
 
-- 撰写时间：2026-10-24
-- 交接原因：会话收尾（提交、远程更换、l1-maintenance 裁决均已完成）
+- 撰写时间：2026-11-13
+- 交接原因：foreman 并入 vibe-base 技能完成（单技能交付），代码与文档已落，剩人工安装与真实 E2E
 
 ## 运行态（失效即删；每条必须带失效条件）
 
-- 无
+- 验证用临时仓库 `/tmp/vb2`（失效条件：/tmp 清理或本会话结束后即可删）
+- 源技能仓库 `/home/sun/vibe-foreman` 仍保留原样、未改动（失效条件：确认不再需要独立 foreman 后归档）
 
 ## 已完成工作摘要
 
-- interview-me 三问收敛意图 v2：长期权威文档唯一机制=登记表+核实门槛；未命中可直接新建不询问（用户否决停下询问）
-- 登记表 vs grep 评估（用户判定规则：有明显优势才引入）：grep 无法证明不存在、表使失败可审计——保留表，形态取 README 索引
-- 落地：AGENTS.md §6 增「权威文档唯一」条+改写索引行（89/100 行）；design/specs README 增索引节（根=实况行/模板=占位行）
-- 决策记录 2026-10-24 已建并登索引（模块=文档）；意图与评估存档 docs/specs/2026-10-24-权威文档登记表与核实门槛.md
-- SKILL.md bump 1.0.3；验证：成对 diff 一致、脚手架双跑一致、幂等复跑 0 新建/13 跳过/md5 零覆盖
-- 提交：分两个提交落地（README 文案 / 权威文档机制）；l1-maintenance.md 工作区改动未提交，留待人工裁决
-- 远程更换 origin 为 git@github.com:once2019/vibe-base.git 并推送（main 同步，领先 8 提交已上传）
-- l1-maintenance 裁决：人工选 A，git checkout 回滚至 2026-10-22 决策合规措辞；草稿=该决策否决表第 3 行「改法列」方案，根/assets 成对已恢复
+- 技能包：`skills/vibe-base` 1.0.3→1.1.0，新增 `assets/scripts/foreman.py`（1879 行，纯标准库）、
+  `assets/docs/governance/orchestration.md`、`assets/docs/design/{orchestration-doctrine,orchestration-orca,dispatch-template}.md`、
+  `tests/`（79 项）
+- 规则重写（AGENTS.md 93/100 行）：§4 评审权下移到「人类或主管 Agent + Ask-first 清单为人类强制项」、
+  §5 记忆归属（docs/memory 主管独占）、§3 决策档位三词、§6 纳入 `.vibe/`
+- 过程态重设计：`.foreman/`→`.vibe/`；`task.json.docs.progress` 显式登记落点；`report` 写 `docs/progress/`；
+  `reply --decision-doc` 为 Ask-first 硬门槛；`review` 增 `docs-decisions` 检查项
+- 脚手架：新增文件 13→18；占位符扫描排除 `scripts/` 与三份参考文档；不再复制 `__pycache__`
+- 验证：79 测试全绿（含变异实验）、双跑幂等、md5 镜像一致（详见 progress 文件）
 
 ## 未完成工作清单
 
-- [ ] skills/vibe-base.zip 未重打包（上传属 Ask-first，需用户确认）（沿旧）
+- [ ] 人工重装技能目录并删除旧的 `~/.pi/agent/skills/vibe-foreman`（安装属人工动作）
+- [ ] 真实通道 E2E：dispatch → worker → DONE → review → merge → report 全链路
+- [ ] `skills/vibe-base.zip` 重打包（上传属 Ask-first）
 
 ## 关键决策引用
 
-- [权威文档登记表与核实门槛](../decisions/2026-10-24-权威文档登记表与核实门槛.md)｜新会话改文档体系前必读
-- [决策前显式核对门槛](../decisions/2026-10-23-决策前显式核对门槛.md)｜决策域同构先例
+- [单技能融合执行编排](../decisions/2026-11-13-单技能融合执行编排.md)｜改编排块或 AGENTS.md 相关条文前必读
+- [权威文档登记表与核实门槛](../decisions/2026-10-24-权威文档登记表与核实门槛.md)｜新建权威文档前必读
 
 ## 新会话必须遵守的约束
 
-- 模块级修改的回复必须含决策核对报告（AGENTS.md §5）
-- 根目录与 skills/vibe-base/assets/ 成对同步：改任一侧必须同步另一侧
-- 新建/更新权威文档前先查所在目录 README 索引并报告核实结果（AGENTS.md §6 权威文档唯一）
+- 编排块的条文正本是 `docs/governance/orchestration.md`（与 assets 成对）；不得另建第二份编排说明
+- 根目录与 `skills/vibe-base/assets/` 成对镜像；例外：`docs/design/README.md` 根=实况行、模板=占位行
+- 状态变更只经 `scripts/foreman.py`，不手改 `.vibe/` 下的 task.json 与 evidence
+- 改 `foreman.py` 后必须跑仓库根 `python3 -m unittest discover -s tests`（`tests/` 属本仓库，不随技能分发）
