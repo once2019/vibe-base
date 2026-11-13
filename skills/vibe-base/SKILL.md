@@ -4,7 +4,7 @@ version: 1.1.0
 description: 初始化项目的 vibe coding 治理体系，并把「规划与实施分离」的执行编排能力一并装进项目：当用户要求初始化项目治理、创建 AGENTS.md、新项目接入 vibe 模板、bootstrap 协作规范时生成治理骨架（AGENTS.md + docs/ 三层记忆与文档体系 + 执行编排块），幂等不覆盖已有文件。已初始化的项目里用户说「用规划与实施分离把 X 落地」「派 worker」「并行推进这几件事」时，按项目内 docs/governance/orchestration.md 执行，不需要重新安装本技能。
 ---
 
-# vibe-base — 治理骨架初始化 + 执行编排分发
+# vibe-base — 治理骨架 + 执行编排分发
 
 本技能承载两件事：①治理骨架的初始化流程（下文）；②规范与细则的正本分发——assets/ 含 AGENTS.md 模板、治理细则四份（`docs/governance/`）、执行编排块（`scripts/foreman.py` + 编排三份：条文、理念、Orca 排障），随 init 一起落入项目，由项目 AGENTS.md 直接引用，不经本文件路由。
 
@@ -38,8 +38,13 @@ init 会把编排能力一起装进项目，形态是「文档 + 控制面脚本
 ## 安装
 
 ```bash
-mkdir -p ~/.pi/agent/skills 
+# pi
+mkdir -p ~/.pi/agent/skills
 cp -r skills/vibe-base ~/.pi/agent/skills/
+
+# codex
+mkdir -p ~/.codex/skills
+cp -r skills/vibe-base ~/.codex/skills/
 ```
 
 无第三方依赖（Python 3.9+ 标准库：控制面用了 `Path.is_relative_to`，脚手架用了内置泛型注解）。回归测试不在技能包内，由维护本技能的仓库运行（仓库根 `tests/`，`python3 -m unittest discover -s tests`）。
