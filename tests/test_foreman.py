@@ -1047,6 +1047,61 @@ class TestDecisionsIndex(TempGitRepoMixin):
         rep = foreman.decisions_index_report(self.root / "docs" / "decisions")
         self.assertTrue(rep["missing_index"])
 
+    def test_anchor_link_counts_as_registered(self) -> None:
+        """`file.md#追记` 是合法登记：只认 `file.md)` 会把已登记文件误报成孤儿。"""
+        self._decision("2026-01-01-a.md")
+        self._index("- 2026-01-01｜x｜[a](2026-01-01-a.md#追记)｜已生效")
+        rep = foreman.decisions_index_report(self.root / "docs" / "decisions")
+        self.assertEqual(rep["orphans"], [])
+        self.assertEqual(rep["dead"], [])
+
+    def test_wrapped_entry_counts_as_registered(self) -> None:
+        """长条目折行时链接落在缩进续行：只解析条目首行会误报孤儿。"""
+        self._decision("2026-01-01-a.md")
+        d = self.root / "docs" / "decisions"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "README.md").write_text(
+            "# 决策索引\n\n- 2026-01-01｜x｜[a](\n  2026-01-01-a.md)｜已生效\n", encoding="utf-8")
+        rep = foreman.decisions_index_report(d)
+        self.assertEqual(rep["orphans"], [])
+        self.assertEqual(rep["dead"], [])
+
+    def test_unreadable_index_is_reported_separately(self) -> None:
+        """一条条目都解析不出时要说"格式不认识"，不能把全部文件报成未登记。"""
+        self._decision("2026-01-01-a.md")
+        d = self.root / "docs" / "decisions"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "README.md").write_text("# 索引\n\n* 2026-01-01｜x｜[a](2026-01-01-a.md)\n", encoding="utf-8")
+        rep = foreman.decisions_index_report(d)
+        self.assertTrue(rep["unreadable"])
+        self.assertEqual(rep["orphans"], [], "格式不认识时不该报孤儿")
+
+    def test_link_outside_decisions_dir_is_not_dead(self) -> None:
+        """条目链到 decisions 目录外的既有文件不算死链。"""
+        self._decision("2026-01-01-a.md")
+        (self.root / "docs" / "shared.md").write_text("# 共享\n", encoding="utf-8")
+        self._index("- 2026-01-01｜x｜[a](2026-01-01-a.md)｜已生效",
+                    "- 2026-01-02｜x｜[共享](../shared.md)｜已生效")
+        rep = foreman.decisions_index_report(self.root / "docs" / "decisions")
+        self.assertEqual(rep["dead"], [])
+        self.assertEqual(rep["orphans"], [])
+
+    def test_missing_decisions_dir_fails_doctor(self) -> None:
+        """决策目录整个缺失时不能静默跳过检查（与 docs-progress 同口径）。"""
+        (self.root / "docs" / "progress").mkdir(parents=True, exist_ok=True)
+        (self.root / "AGENTS.md").write_text("# x\n", encoding="utf-8")
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = foreman.main(["doctor", "--repo", str(self.root), "--json"])
+        out = buf.getvalue()
+        data, _ = json.JSONDecoder().raw_decode(out[out.index("{"):])
+        self.assertEqual(rc, 1)
+        entry = [c for c in data["checks"] if c["name"] == "decisions-index"]
+        self.assertEqual(len(entry), 1, "缺目录时这条检查仍须出现")
+        self.assertFalse(entry[0]["ok"])
+        self.assertNotIn("README.md", entry[0]["detail"],
+                         "缺的是目录，别把提示说成缺索引文件（修法不同）")
+
     def test_doctor_fails_on_orphan_decision(self) -> None:
         self._decision("2026-01-01-a.md")
         self._decision("2026-01-02-孤儿.md")

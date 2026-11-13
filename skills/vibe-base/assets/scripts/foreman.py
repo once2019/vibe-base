@@ -1147,30 +1147,49 @@ TYPE 取 ASK / DONE / ESCALATE。请示用 ASK（附问题、选项、推荐项�
 
 
 DECISION_ENTRY_LINE = re.compile(r"^- \d{4}-\d{2}-\d{2}")
-DECISION_LINK = re.compile(r"\]\(([^)]+\.md)\)")
+DECISION_LINK = re.compile(r"\]\(([^)]+\.md)(?:#[^)]*)?\)")
+
+
+def _decision_entries(readme: Path) -> list[str]:
+    """索引条目文本：`- YYYY-MM-DD` 开头的行 + 其后的缩进续行（长条目折行时链接落在续行）。"""
+    entries: list[str] = []
+    for line in readme.read_text(encoding="utf-8").splitlines():
+        if DECISION_ENTRY_LINE.match(line):
+            entries.append(line)
+        elif entries and line[:1] in (" ", "\t") and line.strip():
+            entries[-1] += line
+    return entries
 
 
 def decisions_index_report(decisions_dir: Path) -> dict:
     """决策索引与实际文件的双向核对：孤儿（文件未登记）与死链（索引指向不存在）。
 
-    只认以 `- YYYY-MM-DD` 开头的行：索引头部的格式示例（`- YYYY-MM-DD｜<模块>｜…`）
-    与说明文字不算条目。同一文件被多条索引行引用是合法的（追记行各带一句改动）。
+    只认以 `- YYYY-MM-DD` 开头的条目：头部格式示例与说明文字不算。链接按 README 所在
+    目录解析相对路径（`file.md#节` 与 `../design/x.md` 都算有效登记），同一文件被多条
+    条目引用合法（追记行各带一句改动说明）。一条条目都解析不出时单独报 unreadable，
+    不把全部文件说成"未登记"。
     """
     files = {p.name for p in decisions_dir.glob("*.md")} - {"README.md", "_template.md"}
     readme = decisions_dir / "README.md"
     if not readme.exists():
-        return {"missing_index": True, "files": len(files), "entries": 0, "orphans": [], "dead": []}
+        return {"missing_index": True, "unreadable": False, "files": len(files),
+                "entries": 0, "orphans": [], "dead": []}
+    entries_text = _decision_entries(readme)
+    if not entries_text:
+        return {"missing_index": False, "unreadable": True, "files": len(files),
+                "entries": 0, "orphans": [], "dead": []}
+    base = readme.parent.resolve()
     entries, dead, linked = 0, [], set()
-    for line in readme.read_text(encoding="utf-8").splitlines():
-        if not DECISION_ENTRY_LINE.match(line):
-            continue
-        for target in DECISION_LINK.findall(line):
+    for text in entries_text:
+        for raw in DECISION_LINK.findall(text):
+            target = raw.strip()
             entries += 1
-            name = Path(target).name
-            linked.add(name)
-            if name not in files:
-                dead.append(name)
-    return {"missing_index": False, "files": len(files), "entries": entries,
+            resolved = (base / target).resolve()
+            if not resolved.exists():
+                dead.append(target)
+            elif resolved.parent == base:
+                linked.add(resolved.name)
+    return {"missing_index": False, "unreadable": False, "files": len(files), "entries": entries,
             "orphans": sorted(files - linked), "dead": sorted(set(dead))}
 
 
@@ -1241,12 +1260,21 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             check("governance-budget", True, f"{detail}；决策 {decisions} 条{due}", "")
     # 决策索引：新建即登记（§6），索引指向不存在文件 = 索引在说谎
     decisions_dir = repo.root / docs_paths(cfg)["decisions"]
-    if decisions_dir.is_dir():
+    if not decisions_dir.is_dir():
+        check("decisions-index", False,
+              f"{docs_paths(cfg)['decisions']} 不存在（决策库是权威记录，缺了等于没有决策史）",
+              "用 vibe-base 技能初始化项目骨架")
+    else:
         rep = decisions_index_report(decisions_dir)
         if rep["missing_index"]:
             check("decisions-index", False,
                   f"{docs_paths(cfg)['decisions']}/README.md 不存在（索引是决策的唯一可查面）",
                   "按 docs/decisions/_template.md 建索引并逐条登记")
+        elif rep["unreadable"]:
+            check("decisions-index", False,
+                  f"索引里没有可识别的条目（{rep['files']} 份决策一份也没解析到）：条目须以 "
+                  "`- YYYY-MM-DD｜…` 开头",
+                  "把条目改成 `- YYYY-MM-DD｜模块｜[标题](文件名.md)｜状态` 格式")
         elif rep["orphans"] or rep["dead"]:
             parts = []
             if rep["orphans"]:
