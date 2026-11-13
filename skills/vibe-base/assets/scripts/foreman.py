@@ -1791,6 +1791,7 @@ def apply_protocol_event(repo: Repo, cfg: dict, event: dict) -> dict:
 
 
 MAX_EMPTY_WAITS = 2  # 连续空等上限：超过就别再开窗口，结束回合等唤醒
+WAIT_STREAK_TTL_MIN = 30  # 计数保鲜期：隔了这么久就不是"连着开窗口"了，重新计数
 
 
 def wait_streak_path(repo: Repo) -> Path:
@@ -1798,13 +1799,19 @@ def wait_streak_path(repo: Repo) -> Path:
 
 
 def read_wait_streak(repo: Repo) -> int:
+    """连续空等次数。超过保鲜期视为 0：上一个会话留下的计数不该拦住这个会话的第一次等待。"""
     p = wait_streak_path(repo)
     if not p.exists():
         return 0
     try:
-        return max(0, int(read_json(p).get("empty_waits", 0)))
+        data = read_json(p)
+        streak = max(0, int(data.get("empty_waits", 0)))
+        at = datetime.strptime(str(data.get("at", "")), "%Y-%m-%dT%H:%M:%SZ")
     except (ValueError, TypeError):
         return 0
+    now = datetime.now(timezone.utc)  # noqa: UP017 — UTC 别名需 3.11+
+    age_min = (now - at.replace(tzinfo=timezone.utc)).total_seconds() / 60  # noqa: UP017
+    return streak if age_min <= WAIT_STREAK_TTL_MIN else 0
 
 
 def write_wait_streak(repo: Repo, n: int) -> None:

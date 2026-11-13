@@ -8,7 +8,7 @@
 
 1. **一次 `events` 调用 = 一轮**。连续两轮空等（`MAX_EMPTY_WAITS=2`）后，第三次调用直接 `fail`，不再进入阻塞等待；错误输出写明「结束回合、在 `handoff.md` 运行态写一行在等什么」。
 2. 空等超时的输出从「等待超时，无匹配协议消息」改成带下一步动作：第 N/2 轮、结束回合、写 handoff。
-3. 计数存在 `.vibe/logs/events-waits.json`，**消费到任何一条协议消息即清零**。
+3. 计数存在 `.vibe/logs/events-waits.json`，**消费到任何一条协议消息即清零**；超过 30 分钟（`WAIT_STREAK_TTL_MIN`）也视为不连续，重新计数——上个会话留下的计数不该拦住这个会话的第一次等待。
 4. 新增 `Transport.has_pending()`：Orca 用 `check --peek`（只读不标记），hcom 用 `list --json` 的 `unread_count`，探测不了返回 `None`。**达到上限时若确有消息在等，放行消费**，避免把主管锁在门外。
 5. `orchestration.md` 的一次闭环拆成「回合一：派工」「回合二：被唤醒后」，明确 `events` 是第二个回合的入口，不是派工之后的下一步。
 
@@ -33,4 +33,4 @@
 
 - 涉及文件/模块：`skills/vibe-base/assets/scripts/foreman.py`（`has_pending` 接口 + 空等计数 + 提示文案）、`orchestration.md` / `orchestration-orca.md`（回合边界与「轮」的定义）
 - 兼容性影响：`events` 在连续两次空等后第三次会非零退出（此前会继续阻塞）。正常用法（派工 → 结束回合 → 被唤醒 → events）不受影响，因为唤醒时必有消息，计数在消费后清零
-- 实测：测试 134 → 137；五处守卫变异全部转红（上限拦截、待收放行、空等计数、消费清零、结束回合提示）
+- 实测：测试 134 → 141；九处守卫变异全部转红（上限拦截、待收放行、空等计数、消费清零、结束回合提示、保鲜期、探测不了放行、拒绝文案、Orca peek）

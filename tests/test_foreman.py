@@ -564,6 +564,16 @@ class TestEventFlow(TempGitRepoMixin):
         name = self.repo.config()["foreman_name"]
         os.environ["FAKE_HCOM_LIST"] = json.dumps([{"name": name, "unread_count": unread}])
 
+    def test_orca_has_pending_uses_peek(self) -> None:
+        """Orca 侧待收探测走 check --peek（只读不标记），有消息 True、空批 False。"""
+        cfg = dict(self.repo.config(), transport="orca")
+        transport = foreman.Orca(self.repo, cfg)
+        os.environ.pop("FAKE_ORCA_EVENT", None)
+        self.assertFalse(transport.has_pending())
+        self.set_event("[FOREMAN:ASK] task=T-001 dispatch=D-001\n用哪个库？")
+        self.assertTrue(transport.has_pending())
+        self.assertTrue(transport.has_pending(), "peek 不该把消息标记成已读")
+
     def test_events_refuses_third_consecutive_empty_wait(self) -> None:
         """连续两轮空等后不再开窗口：规则从"建议"变成机械拦截。
 
@@ -581,6 +591,46 @@ class TestEventFlow(TempGitRepoMixin):
             foreman.main(["events", "--repo", str(self.root), "--timeout", "5"])
         self.assertNotEqual(cm.exception.code, 0)
         self.assertEqual(foreman.read_wait_streak(self.repo), 2, "被拒的那次不该再计数")
+
+
+    def test_refusal_tells_you_to_end_the_turn(self) -> None:
+        """拒绝文案是这条守卫唯一的价值载体：必须指明结束回合 + 写 handoff。"""
+        os.environ.pop("FAKE_HCOM_EVENT", None)
+        os.environ.pop("FAKE_ORCA_EVENT", None)
+        self._set_unread(0)
+        for _ in (1, 2):
+            self.assertEqual(self.run_events(), 1)
+        buf, errbuf = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(errbuf):
+            with self.assertRaises(SystemExit):
+                foreman.main(["events", "--repo", str(self.root), "--timeout", "5"])
+        msg = buf.getvalue() + errbuf.getvalue()
+        self.assertIn("结束这个回合", msg)
+        self.assertIn("handoff.md", msg)
+        self.assertIn("worker-read", msg, "要给出别继续等时的替代动作")
+
+    def test_stale_streak_does_not_block_a_new_session(self) -> None:
+        """上一个会话留下的计数不该拦住这个会话的第一次等待（保鲜期 30 分钟）。"""
+        os.environ.pop("FAKE_HCOM_EVENT", None)
+        os.environ.pop("FAKE_ORCA_EVENT", None)
+        self._set_unread(0)
+        foreman.write_json(foreman.wait_streak_path(self.repo),
+                           {"empty_waits": 2, "at": "2026-11-01T00:00:00Z"})
+        self.assertEqual(foreman.read_wait_streak(self.repo), 0, "隔了 12 天不再算连续")
+        self.assertEqual(self.run_events(), 1, "不该被拒绝，应该正常等一轮再超时")
+
+    def test_unknown_pending_warns_but_does_not_block(self) -> None:
+        """通道探测不了待收消息时只警告：宁可少拦一次，也不能把主管锁死。"""
+        os.environ.pop("FAKE_HCOM_EVENT", None)
+        os.environ.pop("FAKE_ORCA_EVENT", None)
+        os.environ["FAKE_HCOM_LIST"] = "[]"  # 找不到本实例 → has_pending 返回 None
+        for _ in (1, 2):
+            self.assertEqual(self.run_events(), 1)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = foreman.main(["events", "--repo", str(self.root), "--timeout", "5"])
+        self.assertEqual(rc, 1, "应正常超时退出，而不是被拒绝")
+        self.assertIn("无法无损探测", buf.getvalue())
 
     def test_pending_message_is_consumed_even_at_the_cap(self) -> None:
         """已经到上限时，若确有消息在等就必须放行——否则主管被永久锁在门外。"""
