@@ -16,3 +16,4 @@
 - 2026-11-13｜技能库｜[doctor 新增 decisions-index 检查：决策索引双向一致](2026-11-13-doctor-decisions-index.md)｜已生效｜孤儿（未登记）与死链（指向不存在）即 FAIL；只认 `- YYYY-MM-DD` 行（头部格式示例不算条目）、追记重复登记合法；顺带修决策计数多报 2 条
 - 2026-11-13｜技能库｜[派发策略：批次任务 + 三道机械门槛](2026-11-13-batch-task-and-dispatch-gates.md)｜已生效｜有依赖的子项整批派给一个 worker（逐项验收逐项留证），另加 depends-on 前置门槛、scope 相交拦截与重派必写说明
 - 2026-11-13｜技能库｜[events 不再允许连环开窗口：空等计数 + 通道待收探测](2026-11-13-events-no-polling-guard.md)｜已生效｜一次调用算一轮，连续两轮空等后第 3 次直接拒绝并指向 handoff；有消息在等时放行；闭环拆成「派工回合 / 被唤醒回合」
+- 2026-11-13｜技能库｜[escalation 落进状态机：用 Orca 的 taskId/dispatchId 认领任务](2026-11-13-escalation-into-state-machine.md)｜已生效｜通道给的"worker 结束回合未上报"不再只记日志；已 waiting_answer 的任务不降级；prompt 补 --dispatch-id

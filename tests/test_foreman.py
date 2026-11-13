@@ -212,13 +212,13 @@ class TestUnits(unittest.TestCase):
             self.assertEqual(h.wait_message(5)["id"], 7)
 
     def test_orca_skipped_messages_are_logged(self) -> None:
-        """非协议消息（heartbeat/escalation）被 check 消费时必须留痕，不静默丢弃。"""
+        """非协议消息（heartbeat/status）被 check 消费时必须留痕，不静默丢弃。"""
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             repo = foreman.Repo(root)
             msgs = [{"id": "m-1", "type": "heartbeat", "from": "dispatch:d-1", "subject": "alive"},
-                    {"id": "m-2", "type": "escalation", "from": "dispatch:d-1",
-                     "subject": "Worker stopped without reporting"}]
+                    {"id": "m-2", "type": "status", "from": "dispatch:d-1",
+                     "subject": "Worker 正在跑第 2 项"}]
             fake = root / "fake-orca-skip"
             fake.write_text("#!/bin/sh\necho '" + json.dumps({"ok": True, "result": {"messages": msgs}}) + "'\n")
             make_executable(fake)
@@ -227,7 +227,7 @@ class TestUnits(unittest.TestCase):
             self.assertTrue(o.wait_message(5).get("timed_out"))
             log = (root / ".vibe" / "logs" / "transport-skipped.log").read_text(encoding="utf-8")
             self.assertIn("heartbeat", log)
-            self.assertIn("Worker stopped without reporting", log)
+            self.assertIn("Worker 正在跑第 2 项", log)
 
     def test_orca_rejected_delivery_is_surfaced(self) -> None:
         """通道拒收（worker_done 缺 taskId）不能被当成非协议消息跳过，否则主管一直等到超时。"""
@@ -1057,21 +1057,71 @@ class TestAbandon(TempGitRepoMixin):
 class TestOrcaSkippedSurfaced(TempGitRepoMixin):
     """Orca 批次里的非协议消息必须上行提示，不能只报 timeout（E2E 实测教训）。"""
 
-    def test_escalation_batch_yields_skipped_hint(self) -> None:
+    def test_escalation_is_surfaced_not_skipped(self) -> None:
+        """escalation 是"worker 结束回合未上报"的权威信号：必须上行，不能当非协议消息跳过。"""
         self.assertEqual(foreman.main(["init", "--repo", str(self.root), "--transport", "orca"]), 0)
         ev = self.root / ".vibe" / "logs" / "fake-orca-event.json"
         ev.write_text(json.dumps({"id": "m1", "type": "escalation", "from": "term_x",
-                                 "subject": "Worker stopped without reporting",
-                                 "payload": {"taskId": "t1"}}))
+                                  "subject": "Worker stopped without reporting",
+                                  "payload": json.dumps({"taskId": "task_1", "dispatchId": "ctx_1",
+                                                         "stopReason": "finished"})}))
         os.environ["FAKE_ORCA_EVENT"] = str(ev)
         self.addCleanup(os.environ.pop, "FAKE_ORCA_EVENT", None)
         transport = foreman.Orca(self.repo, self.repo.config())
         out = transport.wait_message(1)
-        self.assertTrue(out.get("timed_out"))
-        self.assertEqual([x["type"] for x in out["skipped"]], ["escalation"])
-        self.assertIn("Worker stopped without reporting", out["skipped"][0]["subject"])
-        log = (self.root / ".vibe" / "logs" / "transport-skipped.log").read_text()
-        self.assertIn("escalation", log)
+        self.assertNotIn("timed_out", out)
+        self.assertEqual(out["escalation"]["orchestration_task"], "task_1")
+        self.assertEqual(out["escalation"]["orchestration_dispatch"], "ctx_1")
+        self.assertEqual(out["escalation"]["stop_reason"], "finished")
+
+
+class TestEscalation(TempGitRepoMixin):
+    """escalation 落状态机：Orca 报"worker 结束回合未上报"时任务不能永远停在 running。"""
+
+    def _task(self, status: str = "running") -> None:
+        foreman.write_json(self.repo.task_dir("T-010") / "task.json", {
+            "id": "T-010", "title": "t", "slug": "t", "status": status, "attempts": 1,
+            "scope": ["src/"], "acceptance": "true", "docs": {"progress": None, "decisions": []},
+            "dispatches": [{"id": "D-001", "worker_handle": "dispatch:ctx_1",
+                            "orchestration_task": "task_1", "worktree": "/tmp/x"}],
+            "asks": [], "gates": [], "decisions": [], "log": [], "created_at": "x", "updated_at": "x",
+        })
+
+    def _escalate(self) -> dict:
+        return foreman.apply_protocol_event(self.repo, self.repo.config(), {
+            "instance": "term_x",
+            "data": {"text": "[FOREMAN:ESCALATE] task=T-010 dispatch=D-001\nWorker stopped without reporting"}})
+
+    def test_running_task_goes_failed(self) -> None:
+        self._task("running")
+        res = self._escalate()
+        self.assertEqual(res["task_status"], "failed")
+        self.assertEqual(self.repo.load_task("T-010")["status"], "failed")
+        self.assertTrue((self.repo.task_dir("T-010") / "evidence" / "escalate-D-001.md").exists())
+
+    def test_waiting_answer_is_not_downgraded(self) -> None:
+        """worker 发了 ASK 后结束回合等人：escalation 与那封 ASK 同源，别把等待变成失败。"""
+        self._task("waiting_answer")
+        res = self._escalate()
+        self.assertEqual(res["task_status"], "waiting_answer")
+        self.assertIn("reply", res["hint"])
+
+    def test_resolve_by_orchestration_ids(self) -> None:
+        self._task("running")
+        got = foreman.find_dispatch_by_orchestration(self.repo, "task_1", None)
+        self.assertEqual(got, ("T-010", "D-001"))
+        got = foreman.find_dispatch_by_orchestration(self.repo, None, "ctx_1")
+        self.assertEqual(got, ("T-010", "D-001"))
+        self.assertIsNone(foreman.find_dispatch_by_orchestration(self.repo, "task_other", "ctx_other"))
+
+    def test_prompt_carries_dispatch_id(self) -> None:
+        """worker_done 要 taskId + dispatchId 两样，prompt 漏一个就会白挨一次拒收（T-009 实测）。"""
+        task = {"id": "T-010", "title": "t", "status": "ready", "attempts": 0, "scope": ["src/"],
+                "acceptance": "true", "dispatches": [{"run_id": "run_x"}]}
+        cfg = {"foreman_name": "f", "base": "main", "transport": "orca"}
+        prompt = foreman.worker_prompt(cfg, task, {"id": "D-001"}, Path("/tmp/brief.md"))
+        self.assertIn("--task-id <taskId>", prompt)
+        self.assertIn("--dispatch-id <dispatchId>", prompt)
 
 
 class TestHeaderHygiene(unittest.TestCase):

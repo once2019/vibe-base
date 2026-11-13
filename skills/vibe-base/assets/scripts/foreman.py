@@ -961,6 +961,27 @@ class Orca(Transport):
         def as_text(msg: dict) -> str:
             return "\n".join(x for x in (msg.get("subject"), msg.get("body")) if x)
 
+        # Orca 的 escalation 没有 [FOREMAN:*] 头，但 payload 带 taskId/dispatchId/stopReason：
+        # 这是"worker 结束回合未上报"的唯一权威信号，当普通消息跳过会让任务永远停在 running。
+        for m in msgs:
+            if str(m.get("type")) == "escalation":
+                payload = m.get("payload")
+                if isinstance(payload, str):
+                    try:
+                        payload = json.loads(payload)
+                    except ValueError:
+                        payload = {}
+                payload = payload if isinstance(payload, dict) else {}
+                return {"escalation": {
+                    "id": m.get("id") or m.get("messageId"),
+                    "from": m.get("from") or m.get("from_handle") or "?",
+                    "orchestration_task": payload.get("taskId"),
+                    "orchestration_dispatch": payload.get("dispatchId"),
+                    "stop_reason": payload.get("stopReason"),
+                    "subject": str(m.get("subject") or "")[:200],
+                    "body": str(m.get("body") or ""),
+                }}
+
         # 通道拒收（例如 worker_done 缺 taskId）的 subject 会被加上 "Rejected " 前缀，
         # 协议头正则匹配不到；当成普通非协议消息跳过会让主管一直等到超时。
         rejected = [m for m in msgs if str(m.get("subject") or "").startswith("Rejected ")]
@@ -1118,11 +1139,12 @@ def worker_prompt(cfg: dict, task: dict, dispatch: dict, brief_path: Path) -> st
             f"4. 需要裁决时运行：orca orchestration send --to run:{run_id} --subject "
             f"'[FOREMAN:ASK] task={task['id']} dispatch={dispatch['id']}' "
             f"--body '<问题+选项+推荐项>'，然后结束回合等回复。\n"
-            f"5. 自审通过后上报完成。Orca 的 worker_done 必须带 taskId，漏了会被拒（你会看到 "
-            f"'Rejected worker_done'，主管侧收不到任何东西）：先跑 `orca orchestration worker-list --json`，"
-            f"取 dispatchId 与你启动时一致的那条记录的 taskId，再发："
+            f"5. 自审通过后上报完成。Orca 的 worker_done 必须同时带 taskId 与 dispatchId，"
+            f"缺任一个都会被拒（你会看到 'Rejected worker_done'，主管侧收不到任何东西）：先跑 "
+            f"`orca orchestration worker-list --json`，取与你启动时一致那条记录的 taskId 和 dispatchId，再发："
             f"orca orchestration send --to run:{run_id} --type worker_done --outcome succeeded "
-            f"--task-id <taskId> --subject '[FOREMAN:DONE] task={task['id']} dispatch={dispatch['id']}' "
+            f"--task-id <taskId> --dispatch-id <dispatchId> "
+            f"--subject '[FOREMAN:DONE] task={task['id']} dispatch={dispatch['id']}' "
             f"--body '<摘要+改动文件+自审四项结论+验证命令与输出+分支提交>'，然后停止。"
             f"（放弃任务时 --outcome failed。万一仍被拒：同一条命令补 --task-id 重发，不要改正文。）\n"
             f"6. 卡住时发 --subject '[FOREMAN:ESCALATE] task={task['id']} dispatch={dispatch['id']}' "
@@ -1768,13 +1790,18 @@ def apply_protocol_event(repo: Repo, cfg: dict, event: dict) -> dict:
         result["status"] = "review"
         result["hint"] = "运行 review " + task_id
     elif ptype == "ESCALATE":
-        repo.set_status(task, "failed")
         save_evidence(repo, task_id, f"escalate-{safe_name(dispatch_id)}.md", text)
-        if task["attempts"] >= cfg.get("max_attempts", 3):
+        if task["status"] in WORKER_STATUSES:
+            # worker 发了 ASK 后结束回合等人：escalation 与那封 ASK 同源，别把等待降级成失败
+            repo.log_task(task, task["status"], f"{dref} 结束回合等待答复（escalation 同源，不降级）")
+            result["status"] = task["status"]
+            result["hint"] = "worker 在等你的答复：reply 或 ask 后重新唤醒它"
+        elif task["attempts"] >= cfg.get("max_attempts", 3):
             repo.set_status(task, "blocked")
             repo.log_task(task, "blocked", f"{dref} 第 {task['attempts']} 次失败，交人类")
             result["status"] = "blocked"
         else:
+            repo.set_status(task, "failed")
             repo.log_task(task, "failed", dref)
             result["status"] = "failed"
             result["hint"] = "处理后可重新 dispatch（计入尝试次数）"
@@ -1788,6 +1815,23 @@ def apply_protocol_event(repo: Repo, cfg: dict, event: dict) -> dict:
     repo.save_task(task)
     result["task_status"] = task["status"]
     return result
+
+
+def find_dispatch_by_orchestration(repo: Repo, orchestration_task: str | None,
+                                  orchestration_dispatch: str | None) -> tuple[str, str] | None:
+    """用 Orca 的 taskId / dispatchId 反查本仓的 (task_id, dispatch_id)。
+
+    escalation 这类通道消息只带 Orca 侧 id，没有 [FOREMAN:*] 头，靠 dispatch 记录里的
+    `orchestration_task` 与 `worker_handle` 认领。
+    """
+    for tj in sorted(repo.tasks_dir.glob("*/task.json")):
+        task = read_json(tj)
+        for d in task.get("dispatches") or []:
+            if orchestration_task and d.get("orchestration_task") == orchestration_task:
+                return task["id"], d["id"]
+            if orchestration_dispatch and d.get("worker_handle") == f"dispatch:{orchestration_dispatch}":
+                return task["id"], d["id"]
+    return None
 
 
 MAX_EMPTY_WAITS = 2  # 连续空等上限：超过就别再开窗口，结束回合等唤醒
@@ -1857,6 +1901,27 @@ def cmd_events(args: argparse.Namespace) -> int:
         emit(args, {"timed_out": True, "skipped": skipped, "empty_waits": streak},
              "等待超时，无匹配协议消息" + hint + tail)
         return EXIT_ERROR
+    if event.get("escalation"):
+        esc = event["escalation"]
+        found = find_dispatch_by_orchestration(repo, esc.get("orchestration_task"),
+                                               esc.get("orchestration_dispatch"))
+        if not found:
+            fail(f"收到 escalation（{esc['subject']}）但认不出是本仓哪个任务："
+                 f"Orca task={esc.get('orchestration_task')} dispatch={esc.get('orchestration_dispatch')}。"
+                 "多半是别的仓的 worker，或任务已归档；原文见 logs/transport-skipped.log")
+        task_id, dispatch_id = found
+        text = (f"[FOREMAN:ESCALATE] task={task_id} dispatch={dispatch_id}\n"
+                f"{esc['subject']}\n{esc['body']}")
+        write_wait_streak(repo, 0)
+        result = apply_protocol_event(repo, cfg, {"instance": esc["from"],
+                                                  "data": {"text": text, "from": esc["from"]}})
+        result["escalation"] = esc
+        emit(args, result,
+             f"[ESCALATE] {task_id}/{dispatch_id} 来自 {esc['from']} → 任务状态 {result['task_status']}"
+             f"（Orca 报 worker 结束回合未上报，stopReason={esc.get('stop_reason')}）"
+             + (f"\n建议：{result['hint']}" if result.get("hint") else ""))
+        return EXIT_OK
+
     if event.get("rejected"):
         r = event["rejected"]
         fail(f"通道拒收了 worker 的上报（{r['subject']}）：{r['count']} 条。"
