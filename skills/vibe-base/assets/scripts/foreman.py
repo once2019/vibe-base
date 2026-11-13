@@ -20,14 +20,14 @@ import sys
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 VERSION = "1.0.0"  # 融入 vibe-base 的契约版本：过程态 .vibe/、docs 落点登记、Ask-first 决策记录门槛
 
 EXIT_OK = 0
 EXIT_ERROR = 1
 
-HEADER_RE = re.compile(r"^\[FOREMAN:([A-Z_]+)\]\s+task=(\S+)\s+dispatch=(\S+)", re.M)
+HEADER_RE = re.compile(r"^\[FOREMAN:([A-Z_]+)\]\s+task=(\S+)\s+dispatch=(\S+)", re.MULTILINE)
 
 # 任务状态机（见 docs/specs/vibe-foreman-skill.md）。任意状态 → blocked 由 set_status 单独放行。
 # 构建/测试产物：写进 .git/info/exclude（本地生效，不入库），避免 merge 复跑验收后
@@ -102,13 +102,13 @@ def eprint(msg: str) -> None:
     print(msg, file=sys.stderr)
 
 
-def fail(msg: str, code: int = EXIT_ERROR) -> "NoReturn":
+def fail(msg: str, code: int = EXIT_ERROR) -> NoReturn:
     eprint(f"Error: {msg}")
     sys.exit(code)
 
 
 def now_iso() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")  # noqa: UP017 — UTC 别名需 3.11+
 
 
 def write_json(path: Path, data: dict) -> None:
@@ -152,7 +152,8 @@ def run_cmd(args: list[str], cwd: Path | None = None, timeout: int = 600) -> sub
     （daemon 卡住时应该看到"失败原因"，而不是 Python 栈）。"""
     try:
         return subprocess.run(
-            args, cwd=str(cwd) if cwd else None, capture_output=True, text=True, timeout=timeout
+            args, cwd=str(cwd) if cwd else None, capture_output=True, text=True,
+            timeout=timeout, check=False,
         )
     except subprocess.TimeoutExpired as exc:
         def as_text(v: object) -> str:
@@ -288,7 +289,7 @@ class Repo:
             return defaults
         cfg = read_json(self.config_path)
         merged = {**defaults, **cfg}
-        merged["docs"] = {**defaults["docs"], **(cfg.get("docs") or {})}
+        merged["docs"] = {**DEFAULT_DOCS, **(cfg.get("docs") or {})}
         return merged
 
     # ---- 任务 ----
@@ -368,7 +369,7 @@ def ancestor_commands(limit: int = 16) -> list[str]:
         except OSError:
             break
         out.append(f"{comm}\t{cmdline}")
-        m = re.search(r"^PPid:\s*(\d+)", status, re.M)
+        m = re.search(r"^PPid:\s*(\d+)", status, re.MULTILINE)
         if not m or int(m.group(1)) <= 1:
             break
         pid = int(m.group(1))
@@ -455,17 +456,27 @@ class Transport:
         """阻塞等一条 [FOREMAN:*] 消息，归一化为 {id, instance, data:{text,from}}；超时返回 {'timed_out': True}。"""
         raise NotImplementedError
 
-    def doctor_checks(self, repo: "Repo", cfg: dict) -> list[dict]:
+    # Orca 专有：调用点均已按 cfg["transport"] == "orca" 收口，hcom 实现不提供
+    def run_id(self, timeout: int = 60) -> str | None:
+        raise NotImplementedError
+
+    def gate_create(self, orchestration_task: str, question: str, options: list[str]) -> str:
+        raise NotImplementedError
+
+    def gate_resolve(self, gate_id: str, resolution: str) -> dict:
+        raise NotImplementedError
+
+    def doctor_checks(self, repo: Repo, cfg: dict) -> list[dict]:
         return []
 
-    def cleanup(self, repo: "Repo", dispatch: dict) -> list[str]:
+    def cleanup(self, repo: Repo, dispatch: dict) -> list[str]:
         return []
 
 
 _CONTEXT_CACHE: dict[str, dict] = {}
 
 
-def detect_orca_context(repo: "Repo", cfg: dict) -> dict:
+def detect_orca_context(repo: Repo, cfg: dict) -> dict:
     """调用时判断本进程的运行时环境：是否跑在 Orca 管辖的终端里、是不是 worker。
 
     `ORCA_TERMINAL_HANDLE` 由 Orca 按终端注入，所以它既是"在 Orca 里"的证据，也是"我挂在哪块屏"。
@@ -496,7 +507,7 @@ def detect_orca_context(repo: "Repo", cfg: dict) -> dict:
     return ctx
 
 
-def assert_coordinator(repo: "Repo", cfg: dict) -> dict:
+def assert_coordinator(repo: Repo, cfg: dict) -> dict:
     """控制面命令只能由主管执行：worker 会话（Orca 里某个 live dispatch 的终端）一律拒绝。"""
     ctx = detect_orca_context(repo, cfg)
     if ctx["worker_dispatch"]:
@@ -508,7 +519,7 @@ def assert_coordinator(repo: "Repo", cfg: dict) -> dict:
 _TRANSPORT_CACHE: dict[str, tuple[str, str]] = {}
 
 
-def resolve_transport(repo: "Repo", cfg: dict) -> tuple[str, str]:
+def resolve_transport(repo: Repo, cfg: dict) -> tuple[str, str]:
     """返回 (transport, 来源)。explicit 配置（hcom/orca）优先；否则按运行时自动判定。"""
     raw = str(cfg.get("transport") or "auto").strip().lower()
     if raw in ("hcom", "orca"):
@@ -523,7 +534,7 @@ def resolve_transport(repo: "Repo", cfg: dict) -> tuple[str, str]:
     return _TRANSPORT_CACHE[key]
 
 
-def effective_config(repo: "Repo", cfg: dict | None = None) -> dict:
+def effective_config(repo: Repo, cfg: dict | None = None) -> dict:
     """把解析出的 transport 写进内存 cfg（不落盘），下游的 `cfg["transport"] == "orca"`
     与 worker_prompt / brief_text 无需改动。"""
     cfg = dict(cfg if cfg is not None else repo.config())
@@ -533,7 +544,7 @@ def effective_config(repo: "Repo", cfg: dict | None = None) -> dict:
     return cfg
 
 
-def make_transport(repo: "Repo", cfg: dict) -> Transport:
+def make_transport(repo: Repo, cfg: dict) -> Transport:
     if cfg.get("transport") == "orca":
         return Orca(repo, cfg)
     return Hcom(repo, cfg)
@@ -612,8 +623,8 @@ class Hcom(Transport):
             "events", "--wait", str(timeout), "--type", "message", "--name", self.foreman_name,
             "--mention", self.foreman_name, timeout=timeout + 60,
         )
-        for line in reversed((proc.stdout or "").strip().splitlines()):
-            line = line.strip()
+        for raw in reversed((proc.stdout or "").strip().splitlines()):
+            line = raw.strip()
             if not line.startswith("{"):
                 continue
             try:
@@ -891,7 +902,7 @@ class Orca(Transport):
             rid = self.run_id()
             checks.append({"name": "orca-run", "ok": rid is not None,
                            "detail": "当前会话未绑定编排 Run" if rid is None else f"Run: {rid}",
-                           "fix": f"orca orchestration run-create --objective \"<目标>\" --json" if rid is None else ""})
+                           "fix": "orca orchestration run-create --objective \"<目标>\" --json" if rid is None else ""})
             has_identity = bool(os.environ.get("ORCA_TERMINAL_HANDLE"))
             checks.append({"name": "orca-identity", "ok": has_identity,
                            "detail": "缺少 ORCA_TERMINAL_HANDLE：check/send 会报 no_active_sender_terminal，主管收不到信也无法回话"
@@ -900,7 +911,7 @@ class Orca(Transport):
             if rid is not None:
                 registered = reachable and str(repo.root) in repos_stdout
                 checks.append({"name": "orca-repo", "ok": registered,
-                               "detail": f"仓库未注册到 Orca" if not registered else "仓库已注册",
+                               "detail": "仓库未注册到 Orca" if not registered else "仓库已注册",
                                "fix": f"orca repo add --path {repo.root}" if not registered else ""})
         return checks
 
@@ -1673,12 +1684,12 @@ def cmd_review(args: argparse.Namespace) -> int:
             repo.log_task(task, "blocked", f"审查不通过且已达 {task['attempts']} 次尝试")
         else:
             repo.set_status(task, "failed")
-            failed = [c["name"] for c in checks if not c["ok"]]
+            failed = [str(c["name"]) for c in checks if not c["ok"]]
             repo.log_task(task, "failed", f"审查不通过：{', '.join(failed)}；修正后重新 dispatch")
     repo.save_task(task)
 
     summary = ("审查通过，可 merge" if ok else "审查不通过："
-               + ", ".join(c["name"] for c in checks if not c["ok"]))
+               + ", ".join(str(c["name"]) for c in checks if not c["ok"]))
     emit(args, {"id": task["id"], "status": task["status"], "ok": ok, "checks": checks,
                 "manual_items": review["manual_items"], "shortstat": shortstat},
          f"{task['id']} 审查：{summary}（{shortstat}）\n"

@@ -33,8 +33,8 @@
 - [ ] 人工重装技能目录并删除旧的 `~/.pi/agent/skills/vibe-foreman`（安装属人工动作）
 - [ ] 真实通道 E2E：dispatch → worker → DONE → review → merge → report 全链路
 - [ ] `skills/vibe-base.zip` 重打包（上传属 Ask-first）
-- [ ] `~/storyboard-maker` 已接入新版体系但未提交：其 ruff/mypy 门槛拦 `scripts/foreman.py`
-      （14 处 ruff、20 处 mypy），待选「修上游」或「项目侧排除 scripts/」
+- [x] `~/storyboard-maker` 接入完成并提交（`4db5885`）：控制面先过一遍标准 lint/类型
+      （ruff 14→0、mypy 20→6→0），故无需在项目侧加 overrides
 
 ## 关键决策引用
 
