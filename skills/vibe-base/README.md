@@ -192,7 +192,7 @@ cp -r skills/vibe-base ~/.codex/skills/
 
 新项目说一句「初始化项目治理」或「init AGENTS」。vibe-base 的初始化区生成骨架：幂等，不覆盖已有文件；占位符不追问，Agent 在后续开发中获知实际信息后自己回填。
 
-之后不需要你操心运转，技能也只在冷启动这一刻登场。init 生成的骨架是 17 个文件：1 份 `AGENTS.md`、15 份 docs（治理与编排细则 8 份、决策模板与索引 2 份、记忆 2 份、设计/进度/规格的目录说明各 1 份）与 1 个控制面脚本 `scripts/foreman.py`；同时建好空的 `.vibe/` 过程态目录并把忽略规则写进 `.git/info/exclude`。写文档时 AGENTS.md 的指针直达这些细则文件，治理信号出现时走治理细则，行为红线由 AGENTS.md 常驻保证——全程不依赖任何技能被"想起来"，甚至不依赖技能还装着。
+之后不需要你操心运转，技能也只在冷启动这一刻登场。init 生成的骨架是 16 个文件：1 份 `AGENTS.md`、14 份 docs（治理与编排细则 7 份、决策模板与索引 2 份、记忆 2 份、设计/进度/规格的目录说明各 1 份）与 1 个控制面脚本 `scripts/foreman.py`；同时建好空的 `.vibe/` 过程态目录并把忽略规则写进 `.git/info/exclude`。写文档时 AGENTS.md 的指针直达这些细则文件，治理信号出现时走治理细则，行为红线由 AGENTS.md 常驻保证——全程不依赖任何技能被"想起来"，甚至不依赖技能还装着。
 
 两个能力各有入口。骨架由 `AGENTS.md` 常驻，你不用记；编排在会话里说一句「用规划与实施分离把 X 落地」，主管会读项目内的 `docs/governance/orchestration.md` 并照着走，第一次动手之前先体检环境。
 
@@ -209,19 +209,21 @@ cp -r skills/vibe-base ~/.codex/skills/
 
 ## 维护这个模板
 
-正本是 `skills/vibe-base/assets/`；根目录同名文件是它的镜像。例外两类：
+正本是 `skills/vibe-base/assets/`。根目录的同名文件是**符号链接**指过去，只有一份实体，改哪边都是同一份。
 
-- 状态类文件（`docs/memory/context.md`、`docs/memory/handoff.md`、`docs/decisions/README.md`、`docs/specs/README.md`、`docs/design/README.md`）根是本仓实况、模板必须是占位；照镜像去同步它们，等于把本仓的会话状态发给所有新项目
+例外两类，它们必须是独立文件：
+
+- 状态类文件（`docs/memory/context.md`、`docs/memory/handoff.md`、`docs/decisions/README.md`、`docs/specs/README.md`、`docs/design/README.md`）根是本仓实况、模板是占位；做成链接等于把本仓的会话状态发给所有新项目
 - `docs/design/governance-retrospective.md` 只在根，属维护记录
 
-这条不变量由 `tests/test_mirror.py` 守着（含反向守卫：实况与模板不同的文件集合变了就报错）。改完逐项验证：
+`tests/test_mirror.py` 守着这条不变量：该是链接的必须是链接（有人把它复制成实体文件就报错），该独立的必须在模板里留占位。改完逐项验证：
 
 ```bash
 python3 -m unittest discover -s tests          # 控制面回归（仓库根）
 python3 skills/vibe-base/scripts/init_vibe_project.py /tmp/tpl-a   # 脚手架双跑：首跑 N 新建、复跑 0 新建
 ```
 
-打包 `skills/vibe-base.zip` 后上传属 Ask-first。改 `scripts/foreman.py` 须同步根目录镜像并复跑回归。
+打包 `skills/vibe-base.zip` 后上传属 Ask-first。根目录的 `scripts/foreman.py` 是符号链接，改完直接复跑回归。
 
 ## 这个模板不做什么
 

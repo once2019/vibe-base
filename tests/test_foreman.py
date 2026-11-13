@@ -1085,11 +1085,15 @@ class TestForemanNamePicking(TempGitRepoMixin):
         self.assertEqual((name, tag), (f"{self._slug()}-foreman", self._slug()))
 
     def test_two_same_named_dirs_differ(self) -> None:
+        """同名目录靠路径哈希区分：两个 api/ 都撞上 api-foreman 时应挑到不同名字。"""
+        self._set_list([{"name": "api-foreman", "directory": "/tmp/other-repo"}])
         with tempfile.TemporaryDirectory() as a, tempfile.TemporaryDirectory() as b:
             ra, rb = Path(a) / "api", Path(b) / "api"
             ra.mkdir(), rb.mkdir()
-            self.assertNotEqual(foreman.foreman_name_pairs(foreman.Repo(ra))[1],
-                                foreman.foreman_name_pairs(foreman.Repo(rb))[1])
+            na, ta = foreman.pick_foreman_names(foreman.Repo(ra), str(FIXTURE_HCOM))
+            nb, tb = foreman.pick_foreman_names(foreman.Repo(rb), str(FIXTURE_HCOM))
+            self.assertNotEqual(na, nb)
+            self.assertEqual(na, f"{ta}-foreman")
 
     def test_init_picks_hashed_pair_on_collision(self) -> None:
         """新仓库 init 自动避让：假 hcom 放到 PATH 最前，模拟没有自定义 hcom_bin 的首跑。"""

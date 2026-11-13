@@ -29,13 +29,6 @@ FORMAT_EXAMPLES = (
 # 程序文件不是模板：其中的 <...> 是代码/文档里的字面量，不参与回填扫描
 CODE_PREFIXES = ("scripts/",)
 
-# 技能自带的参考文档（随 init 发布、内容不随项目变化）：其中的 <taskId> 之类是命令字面量，不是待填项
-REFERENCE_DOCS = (
-    "docs/governance/dispatch-template.md",
-    "docs/governance/orchestration-doctrine.md",
-    "docs/governance/orchestration-orca.md",
-)
-
 PLACEHOLDER_RE = re.compile(r"<([^<>\n]+)>")
 
 
@@ -96,8 +89,8 @@ def scan_placeholders(target: Path, created):
     findings = []
     for dst in created:
         rel = dst.relative_to(target).as_posix()
-        if (rel in FORMAT_EXAMPLES or rel in REFERENCE_DOCS
-                or rel.startswith(GOVERNANCE_PREFIX) or rel.startswith(CODE_PREFIXES)):
+        if (rel in FORMAT_EXAMPLES or rel.startswith(GOVERNANCE_PREFIX)
+                or rel.startswith(CODE_PREFIXES)):
             continue
         for lineno, line in enumerate(dst.read_text(encoding="utf-8").splitlines(), 1):
             for m in PLACEHOLDER_RE.finditer(line):
@@ -119,11 +112,9 @@ def drift_note(target: Path, skipped: list[Path]) -> str:
     try:
         if src.read_bytes() == dst.read_bytes():
             return ""
-        version = re.search(r'^VERSION = "([^"]+)"', src.read_text(encoding="utf-8"), re.M)
     except OSError:
         return ""
-    tag = f"模板版本 {version.group(1)}，" if version else ""
-    return f"!! {CONTROL_SCRIPT} 与技能模板不一致（{tag}未覆盖）：需要更新时用 --force 或手工替换"
+    return f"!! {CONTROL_SCRIPT} 与技能模板不一致（未覆盖）：需要更新时用 --force 或手工替换"
 
 
 def main():

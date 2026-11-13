@@ -23,10 +23,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, NoReturn
 
-VERSION = "1.0.0"  # 融入 vibe-base 的契约版本：过程态 .vibe/、docs 落点登记、Ask-first 决策记录门槛
-
 EXIT_OK = 0
 EXIT_ERROR = 1
+AGENTS_BUDGET_LINES = 100  # AGENTS.md §5 双预算（模板契约值，改它是一次治理动作）
+AGENTS_BUDGET_CHARS = 200
 HCOM_LIST_TIMEOUT = 60  # hcom list 的等待上限：doctor 与 init 共用，别各写一个
 
 HEADER_RE = re.compile(r"^\[FOREMAN:([A-Z_]+)\]\s+task=(\S+)\s+dispatch=(\S+)", re.MULTILINE)
@@ -232,21 +232,16 @@ def is_own_dir(directory: object, root: Path) -> bool:
         return False
 
 
-def foreman_name_pairs(repo: Repo) -> list[tuple[str, str]]:
-    """(主管名, 配套 tag)：同一目录永远同一对，同名目录靠路径短哈希区分。
+def pick_foreman_names(repo: Repo, bin_name: str = "hcom") -> tuple[str, str]:
+    """挑没被别的仓占用的 (主管名, tag)；取不到实例表就退回默认，doctor 会再查。
 
-    tag 跟着名字一起加哈希：否则两个同名目录的仓仍共用 tag，`hcom kill tag:<tag>`
-    会跨仓杀，worker 名（`<tag>-*`）也可能重名。"""
+    名字带路径短哈希，tag 跟着一起带：否则两个同名目录的仓共用 tag，`hcom kill tag:<tag>`
+    会跨仓杀、worker 名（`<tag>-*`）也可能重名。同一目录永远同一对。"""
     slug = slugify(repo.root.name)
     digest = hashlib.sha1(str(repo.root).encode("utf-8")).hexdigest()
-    return [(f"{slug}-foreman", slug),
-            (f"{slug}-{digest[:4]}-foreman", f"{slug}-{digest[:4]}"),
-            (f"{slug}-{digest[:8]}-foreman", f"{slug}-{digest[:8]}")]
-
-
-def pick_foreman_names(repo: Repo, bin_name: str = "hcom") -> tuple[str, str]:
-    """挑没被别的仓占用的 (主管名, tag)；取不到实例表就退回默认，doctor 会再查。"""
-    pairs = foreman_name_pairs(repo)
+    pairs = [(f"{slug}-foreman", slug),
+             (f"{slug}-{digest[:4]}-foreman", f"{slug}-{digest[:4]}"),
+             (f"{slug}-{digest[:8]}-foreman", f"{slug}-{digest[:8]}")]
     if shutil.which(bin_name) is None:
         return pairs[0]
     items = hcom_instances(bin_name, repo.root, timeout=HCOM_LIST_TIMEOUT)
@@ -1189,10 +1184,20 @@ def cmd_doctor(args: argparse.Namespace) -> int:
           f"主管会话识别为 {detected}（worker 默认用它）" if detected
           else "未识别主管会话 agent（/proc 与环境标记都没命中）→ worker 用 config 兜底",
           "")
-    for agent in ("codex", "pi"):
-        check(f"agent:{agent}", shutil.which(agent) is not None,
-              f"{agent} 不在 PATH" if shutil.which(agent) is None else f"{agent} 可用",
-              f"安装 {agent} 或 dispatch --agent 显式指定" if shutil.which(agent) is None else "")
+    # 治理预算：把"定期自查"变成每次体检都能看到的一条（预算值即模板契约，见 AGENTS.md §5）
+    agents_md = repo.root / "AGENTS.md"
+    if agents_md.exists():
+        lines = agents_md.read_text(encoding="utf-8").splitlines()
+        widest = max((len(x) for x in lines), default=0)
+        detail = (f"{len(lines)} 行（预算 {AGENTS_BUDGET_LINES}）/ 最长 {widest} 字符"
+                  f"（预算 {AGENTS_BUDGET_CHARS}）")
+        if len(lines) > AGENTS_BUDGET_LINES or widest > AGENTS_BUDGET_CHARS:
+            check("governance-budget", False, detail + "：超预算先修剪，别压缩措辞",
+                  "删「读代码即可获知」的条目，或把细节挪进 docs/governance/")
+        else:
+            decisions = len(list((repo.root / docs_paths(cfg)["decisions"]).glob("*.md")))
+            due = "，考虑跑一次复盘（governance-review.md）" if decisions >= 20 else ""
+            check("governance-budget", True, f"{detail}；决策 {decisions} 条{due}", "")
 
     ok = all(c["ok"] for c in checks)
     emit(args, {"ok": ok, "transport": transport_name, "transport_source": transport_source,
@@ -1989,7 +1994,6 @@ def cmd_report(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="foreman", description="vibe-base 执行编排控制面 CLI")
-    p.add_argument("--version", action="version", version=f"foreman {VERSION}")
     sub = p.add_subparsers(dest="command", required=True)
 
     def add_json(sp: argparse.ArgumentParser) -> None:

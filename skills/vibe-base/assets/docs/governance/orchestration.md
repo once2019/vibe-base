@@ -4,7 +4,7 @@
 > **不说就不启用**：休眠期不派工、不探测编排通道、不派生 agent（`.vibe/` 空骨架随 init 备好，目录存在不等于启用）。
 > 说了就启用。并行推进多个任务是常规用法，一次只跑一个只是最简单的形态。
 > 红线、预算与文档归属见 AGENTS.md（§4 合并权与 Ask-first、§5 记忆归属、§6 文档落点、§7 工作流程）；本文件只写"怎么执行"。
-> 理念与"什么时候不该用"见 `docs/governance/orchestration-doctrine.md`；派工单写法见 `docs/governance/dispatch-template.md`；
+> 理念与"什么时候不该用"见 `docs/governance/orchestration-doctrine.md`；
 > Orca 排障见 `docs/governance/orchestration-orca.md`（仅人工介入时读）。控制面脚本：`scripts/foreman.py`（纯标准库）。
 
 ## 同机多仓并行
@@ -32,6 +32,10 @@ python3 $F report T-001             # 竣工单 → docs/progress/（入库）
 ```
 
 每轮只处理一步，然后结束回合等通道唤醒；不轮询、不 sleep。约束的是回合粒度，不是并行度：多个任务可以同时在跑，每个回合仍只处理一条事件。失败一律非零退出 + stderr 说明（fail-visible），不吞错重试。
+
+## 派工单
+
+`task new` 按 `brief_text()` 生成派工单，worker 只认这一份。两条硬判据：**范围必须列路径**（禁写"相关文件"，否则等于全库），**验收必须是一条可执行命令**（禁写"确保测试通过"，worker 会自己编一个）。其余各节写法见生成物本身。
 
 ## 角色与权限
 
