@@ -25,7 +25,7 @@
 - 追补：未 init 时的 traceback 改为可读错误（`Repo.config()` 一处兜住）；`.vibe/` 空骨架改由 init 一并建好，
   「默认休眠」四条条文同步改写；测试 79→83 项
 - 追补二：hcom 名字撞线防护（默认名带仓库名 + doctor 两条检查 + 撞名自动加哈希 + tag 带项目前缀），
-  审查后修掉前缀比较误判（`/x/api-extra` 被当成 `/x/api`）、tag 未随名字加哈希、模板漂移静默跳过，测试 107 项
+  审查后修掉前缀比较误判、tag 未随名字加哈希、模板漂移静默跳过、工具缓存被复制进项目，测试 109 项
 - 收口：编排附属 3 份从 design/ 挪进 governance/；`governance-retrospective.md` 拆解——8 问与再复盘信号并入
   `governance-review.md`，证据链只留本仓库 design/，assets/docs/design/ 只剩占位 README
 - 验证：79 测试全绿（含变异实验）、双跑幂等、md5 镜像一致（详见 progress 文件）

@@ -19,6 +19,37 @@ def git(target: Path, *args: str) -> None:
     subprocess.run(["git", *args], cwd=target, check=True, capture_output=True)
 
 
+class TestScaffoldFileFilter(unittest.TestCase):
+    """工具缓存不是骨架内容：在 assets 里跑一次 ruff/pytest 就会生成，不能跟着复制进项目。"""
+
+    def test_cache_paths_are_excluded(self) -> None:
+        sys.path.insert(0, str(SCRIPT.parent))
+        import init_vibe_project as scaffold
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            keep = [root / "AGENTS.md", root / "scripts" / "foreman.py"]
+            drop = [root / "scripts" / ".ruff_cache" / "CACHEDIR.TAG",
+                    root / "scripts" / "__pycache__" / "x.pyc",
+                    root / "docs" / ".mypy_cache" / "cache.json",
+                    root / ".git" / "config"]
+            for f in keep + drop:
+                f.parent.mkdir(parents=True, exist_ok=True)
+                f.write_text("x\n", encoding="utf-8")
+            for f in keep:
+                self.assertTrue(scaffold.is_scaffold_file(f), f)
+            for f in drop:
+                self.assertFalse(scaffold.is_scaffold_file(f), f)
+
+    def test_copy_scope_excludes_caches(self) -> None:
+        """守卫：复制范围里不许出现缓存（曾因在 assets/scripts 里跑 ruff 而把 .ruff_cache 发进项目）。"""
+        sys.path.insert(0, str(SCRIPT.parent))
+        import init_vibe_project as scaffold
+        bad = [p.as_posix() for p in scaffold.collect_asset_files()
+               if any(x in p.parts for x in ("__pycache__", ".ruff_cache",
+                                             ".mypy_cache", ".pytest_cache"))]
+        self.assertEqual(bad, [], f"复制范围里混进了缓存：{bad}")
+
+
 class TestInitScaffold(unittest.TestCase):
     def setUp(self) -> None:
         self.root = Path(tempfile.mkdtemp(prefix="vibe-init-"))

@@ -59,9 +59,17 @@ def bootstrap_state(target: Path) -> tuple[bool, str]:
     return True, first[0] if first else ".vibe/ 已初始化"
 
 
+# 工具缓存不是骨架内容：在 assets 目录里跑一次 ruff/pytest 就会生成，别跟着复制进项目
+CACHE_PARTS = {"__pycache__", ".ruff_cache", ".mypy_cache", ".pytest_cache", ".git"}
+
+
+def is_scaffold_file(path: Path) -> bool:
+    return (path.is_file() and path.suffix != ".pyc"
+            and not any(part in CACHE_PARTS or part.startswith(".") for part in path.parts))
+
+
 def collect_asset_files():
-    return sorted(p for p in ASSETS_DIR.rglob("*")
-                  if p.is_file() and "__pycache__" not in p.parts and p.suffix != ".pyc")
+    return sorted(p for p in ASSETS_DIR.rglob("*") if is_scaffold_file(p))
 
 
 def copy_scaffold(target: Path, force: bool):
