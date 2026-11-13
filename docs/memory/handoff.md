@@ -37,8 +37,8 @@
 
 - [x] **真实通道 E2E 已跑通**（Orca，`/tmp/e2e-skill`，2026-11-13）：两轮全链路
       dispatch → worker(pi) → DONE → review → merge → report；暴露并修掉 4 个问题（见 progress）
-- [ ] **storyboard-maker 已冻结**（人类指令 2026-11-13）：技能完善前不再逐次同步，之后一次性整体升级。
-      冻结点 `acaf06e`（未 push，`cnb/main..master` 251 个提交，其中含他人会话的 T-004 未跟踪竣工单，勿动）
+- [x] **storyboard-maker 已升级**（`6a36a74`，2026-11-13）：控制面同步到 `24d2756`（E2E 修复版），
+      骨架其余 14 份逐字节一致、AGENTS.md 保持项目版；四门禁绿（pytest 1981）。该仓仍未 push（ahead 266）
 - [x] `~/storyboard-maker` 接入完成并提交（`4db5885`）：控制面先过一遍标准 lint/类型
       （ruff 14→0、mypy 20→6→0），故无需在项目侧加 overrides
 
