@@ -46,7 +46,7 @@
 
 | 能力 | 命令 | 何时需要 | 验证 |
 | --- | --- | --- | --- |
-| 任务 DAG | `worker-start --deps '[<taskId>,...]'` | 多任务有依赖顺序；foreman 是线性单任务，需要 DAG 就在原生层做，别硬塞 | 📖help |
+| 任务 DAG | `worker-start --deps '[<taskId>,...]'` | foreman 的 `--depends-on` 只是「前置未完成就拒派」的门槛，不做调度、不建 DAG；真要编排级依赖顺序就在原生层做 | 📖help |
 | 按 dispatch 重试 | `worker-start --retry-of <dispatchId>` | 原生路径重派；foreman 用自己的 `dispatch`（复用同一棵树），不用 `--retry-of` | 📖help |
 | 读 worker 输出 | `worker-read --dispatch <id> --source auto|terminal` | 判断"卡住"还是"死循环" | 📖help |
 | 停/释放 worker | `worker-stop --dispatch <id>` / `worker-release --dispatch <id>` | 放弃或收尾（foreman 的 `merge` 清理已含 release + task 结算） | ✅实测 |

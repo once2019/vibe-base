@@ -14,3 +14,4 @@
 - 2026-11-13｜技能库｜[单技能融合执行编排](2026-11-13-单技能融合执行编排.md)｜已生效｜foreman 并入 vibe-base：默认休眠、.vibe/ 过程态、Ask-first 裁决须落决策记录
 - 2026-11-13｜技能库｜[镜像改符号链接，骨架删掉影子文档](2026-11-13-mirror-symlink-and-trim.md)｜已生效（取代双份实体 + 镜像测试）｜每次改动写两遍、漏一次就发旧版，链接让漂移从机制上消失；`dispatch-template.md` 是 `brief_text()` 的影子文档故删；两个版本号已实测漂移故去掉脚本自持版本；doctor 用 `governance-budget` 换掉两条硬编码 agent 检查
 - 2026-11-13｜技能库｜[doctor 新增 decisions-index 检查：决策索引双向一致](2026-11-13-doctor-decisions-index.md)｜已生效｜孤儿（未登记）与死链（指向不存在）即 FAIL；只认 `- YYYY-MM-DD` 行（头部格式示例不算条目）、追记重复登记合法；顺带修决策计数多报 2 条
+- 2026-11-13｜技能库｜[派发策略：批次任务 + 三道机械门槛](2026-11-13-batch-task-and-dispatch-gates.md)｜已生效｜有依赖的子项整批派给一个 worker（逐项验收逐项留证），另加 depends-on 前置门槛、scope 相交拦截与重派必写说明

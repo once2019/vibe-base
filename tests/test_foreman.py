@@ -453,6 +453,113 @@ class TestEventFlow(TempGitRepoMixin):
         self.assertFalse(list((self.root / "docs" / "progress").glob("*-T-001.md")),
                          "未 completed 不应落竣工单")
 
+    def test_retry_without_note_is_refused(self) -> None:
+        """重派必须写清这次改了什么：原样重派只会再失败一次。"""
+        wt = Path(self.repo.load_task("T-001")["dispatches"][0]["worktree"])
+        (wt / "README.md").write_text("越界\n", encoding="utf-8")
+        self.commit_in(wt, "oos")
+        self.set_event("[FOREMAN:DONE] task=T-001 dispatch=D-001\n完成")
+        self.run_events()
+        foreman.main(["review", "T-001", "--repo", str(self.root)])
+        self.assertEqual(self.repo.load_task("T-001")["status"], "failed")
+        with self.assertRaises(SystemExit) as cm:
+            foreman.main(["dispatch", "T-001", "--repo", str(self.root), "--headless"])
+        self.assertNotEqual(cm.exception.code, 0)
+        self.assertEqual(self.repo.load_task("T-001")["status"], "failed", "被拒的派工不能改状态")
+
+        self.dispatch(["--retry-note", "缩 scope 到 src/keep.txt"])
+        task = self.repo.load_task("T-001")
+        self.assertEqual(task["retry_notes"][-1]["note"], "缩 scope 到 src/keep.txt")
+        brief = (self.root / ".vibe" / "tasks" / "T-001" / "brief.md").read_text(encoding="utf-8")
+        self.assertIn("重派说明", brief, "worker 必须看到这次改了什么")
+        self.assertIn("缩 scope 到 src/keep.txt", brief)
+
+    def test_dispatch_refuses_unmet_dependency(self) -> None:
+        """depends_on 是门槛不是调度：前置没 completed 就不许派工。"""
+        rc = foreman.main(["task", "new", "--repo", str(self.root), "--title", "依赖前置",
+                           "--scope", "docs/", "--accept", "true", "--depends-on", "T-001"])
+        self.assertEqual(rc, 0)
+        with self.assertRaises(SystemExit) as cm:
+            foreman.main(["dispatch", "T-002", "--repo", str(self.root), "--headless"])
+        self.assertNotEqual(cm.exception.code, 0)
+        self.assertEqual(self.repo.load_task("T-002")["status"], "ready")
+
+    def test_dispatch_refuses_scope_overlap_with_in_flight(self) -> None:
+        """两个在跑任务改同一批文件必撞合并冲突：scope 相交默认拒绝，显式放行才派。"""
+        rc = foreman.main(["task", "new", "--repo", str(self.root), "--title", "同目录并行",
+                           "--scope", "src/api/", "--accept", "true"])
+        self.assertEqual(rc, 0)
+        with self.assertRaises(SystemExit) as cm:
+            foreman.main(["dispatch", "T-002", "--repo", str(self.root), "--headless"])
+        self.assertNotEqual(cm.exception.code, 0)
+        self.assertEqual(self.repo.load_task("T-002")["status"], "ready")
+        # 显式放行后可以派
+        self.assertEqual(foreman.main(["dispatch", "T-002", "--repo", str(self.root),
+                                       "--headless", "--allow-overlap"]), 0)
+        self.assertIn(self.repo.load_task("T-002")["status"], ("dispatched", "running"))
+
+    def test_disjoint_scope_dispatches_in_parallel(self) -> None:
+        """scope 不相交就该放行：策略不是禁止并行。"""
+        rc = foreman.main(["task", "new", "--repo", str(self.root), "--title", "另一个目录",
+                           "--scope", "docs/", "--accept", "true"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(foreman.main(["dispatch", "T-002", "--repo", str(self.root), "--headless"]), 0)
+        self.assertIn(self.repo.load_task("T-002")["status"], ("dispatched", "running"))
+
+    def _batch_task(self, *accepts: str) -> None:
+        args = ["task", "new", "--repo", str(self.root), "--title", "批次两件", "--scope", "src/"]
+        for i, cmd in enumerate(accepts, start=1):
+            args += ["--item", f"第 {i} 件", "--accept", cmd]
+        self.assertEqual(foreman.main(args), 0)
+
+    def _dispatch_batch(self) -> Path:
+        self.assertEqual(foreman.main(["dispatch", "T-002", "--repo", str(self.root),
+                                       "--headless", "--allow-overlap"]), 0)
+        wt = Path(self.repo.load_task("T-002")["dispatches"][0]["worktree"])
+        (wt / "src" / "batch.txt").write_text("x\n", encoding="utf-8")
+        self.commit_in(wt, "feat: batch")
+        self.set_event("[FOREMAN:DONE] task=T-002 dispatch=D-001\n完成")
+        self.run_events()
+        return wt
+
+    def test_batch_task_runs_each_item(self) -> None:
+        """一串有依赖的子项当一个任务派出去：逐项验收、逐项留证，主管只审一次。"""
+        self._batch_task("true", "true")
+        task = self.repo.load_task("T-002")
+        self.assertEqual([it["title"] for it in task["items"]], ["第 1 件", "第 2 件"])
+        brief = (self.root / ".vibe" / "tasks" / "T-002" / "brief.md").read_text(encoding="utf-8")
+        self.assertIn("## 子项", brief)
+        self.assertIn("第 1 件", brief)
+        self.assertIn("每项一个 commit", brief)
+
+        self._dispatch_batch()
+        self.assertEqual(foreman.main(["review", "T-002", "--repo", str(self.root)]), 0)
+        self.assertEqual(self.repo.load_task("T-002")["status"], "merge_ready")
+        ev = self.repo.task_dir("T-002") / "evidence"
+        self.assertTrue((ev / "acceptance-D-001-01.log").exists(), "每个子项各一份证据")
+        self.assertTrue((ev / "acceptance-D-001-02.log").exists())
+        checks = {c["name"]: c["ok"] for c in self.repo.load_task("T-002")["review"]["checks"]}
+        self.assertTrue(checks["acceptance:1 第 1 件"])
+        self.assertTrue(checks["acceptance:2 第 2 件"])
+
+    def test_batch_task_fails_and_names_the_item(self) -> None:
+        """子项验收失败要指名第几项，不能只说"整批失败"。"""
+        self._batch_task("true", "false")
+        self._dispatch_batch()
+        self.assertEqual(foreman.main(["review", "T-002", "--repo", str(self.root)]), 1)
+        task = self.repo.load_task("T-002")
+        self.assertEqual(task["status"], "failed")
+        failed = [c["name"] for c in task["review"]["checks"] if not c["ok"]]
+        self.assertEqual(failed, ["acceptance:2 第 2 件"])
+        ev = self.repo.task_dir("T-002") / "evidence"
+        self.assertTrue((ev / "acceptance-D-001-02.log").exists(), "失败项也要留证")
+
+    def test_item_accept_count_mismatch_refused(self) -> None:
+        with self.assertRaises(SystemExit) as cm:
+            foreman.main(["task", "new", "--repo", str(self.root), "--title", "配对错",
+                          "--scope", "src/", "--item", "a", "--item", "b", "--accept", "true"])
+        self.assertNotEqual(cm.exception.code, 0)
+
     def test_merge_refuses_when_not_merge_ready(self) -> None:
         with self.assertRaises(SystemExit):
             foreman.main(["merge", "T-001", "--repo", str(self.root)])
@@ -467,8 +574,8 @@ class TestEventFlow(TempGitRepoMixin):
         self.assertEqual(foreman.main(["review", "T-001", "--repo", str(self.root)]), 1)
         self.assertEqual(self.repo.load_task("T-001")["status"], "failed")
 
-        # 第 2 次：重派复用既有树，再次失败
-        self.dispatch()
+        # 第 2 次：重派复用既有树，再次失败（重派必须写清这次改了什么）
+        self.dispatch(["--retry-note", "缩 scope 到 src/keep.txt"])
         task = self.repo.load_task("T-001")
         self.assertEqual(task["attempts"], 2)
         wt = Path(task["dispatches"][-1]["worktree"])
@@ -479,7 +586,7 @@ class TestEventFlow(TempGitRepoMixin):
         foreman.main(["review", "T-001", "--repo", str(self.root)])
 
         # 第 3 次失败 → blocked，且不得再派
-        self.dispatch()
+        self.dispatch(["--retry-note", "补背景：README 不在范围内，别碰"])
         wt = Path(self.repo.load_task("T-001")["dispatches"][-1]["worktree"])
         (wt / "README.md").write_text("还越界\n", encoding="utf-8")
         self.commit_in(wt, "oos3")
@@ -1065,6 +1172,16 @@ class TestDecisionsIndex(TempGitRepoMixin):
         rep = foreman.decisions_index_report(d)
         self.assertEqual(rep["orphans"], [])
         self.assertEqual(rep["dead"], [])
+
+    def test_empty_index_without_decisions_is_ok(self) -> None:
+        """新项目：只有索引骨架、一份决策都没有，属正常态（不是格式错误）。"""
+        d = self.root / "docs" / "decisions"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "README.md").write_text("# 决策索引\n\n- YYYY-MM-DD｜<模块>｜[<标题>](YYYY-MM-DD-x.md)\n",
+                                     encoding="utf-8")
+        rep = foreman.decisions_index_report(d)
+        self.assertFalse(rep["unreadable"])
+        self.assertEqual((rep["files"], rep["entries"], rep["orphans"], rep["dead"]), (0, 0, [], []))
 
     def test_unreadable_index_is_reported_separately(self) -> None:
         """一条条目都解析不出时要说"格式不认识"，不能把全部文件报成未登记。"""

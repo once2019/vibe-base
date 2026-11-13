@@ -188,6 +188,49 @@ def safe_name(raw: object, limit: int = 40) -> str:
     return re.sub(r"[^0-9A-Za-z_.-]+", "_", str(raw or "?"))[:limit] or "?"
 
 
+IN_FLIGHT_STATUSES = {"dispatched", "running", "waiting_answer", "waiting_human",
+                      "review", "merge_ready"}
+
+
+def scope_pair_hits(a: str, b: str) -> bool:
+    """两个 scope 是否相交：同一文件，或一个是另一个的上级目录。"""
+    na = a.strip().rstrip("/")
+    nb = b.strip().rstrip("/")
+    return bool(na and nb) and (na == nb or na.startswith(nb + "/") or nb.startswith(na + "/"))
+
+
+def scope_conflicts(repo: Repo, task: dict) -> list[str]:
+    """本任务与在跑任务 scope 相交的清单（并行改同一处必撞合并冲突）。
+
+    空 scope 视为全库，与任何在跑任务都算相交。
+    """
+    mine = task.get("scope") or []
+    out: list[str] = []
+    for tj in sorted(repo.tasks_dir.glob("*/task.json")):
+        other = read_json(tj)
+        if other.get("id") == task["id"] or other.get("status") not in IN_FLIGHT_STATUSES:
+            continue
+        theirs = other.get("scope") or []
+        if not mine or not theirs:
+            out.append(f"{other['id']}（{other['status']}）↔ 全库")
+            continue
+        for a in mine:
+            for b in theirs:
+                if scope_pair_hits(a, b):
+                    out.append(f"{other['id']}（{other['status']}）：{a} ↔ {b}")
+    return out
+
+
+def unmet_dependencies(repo: Repo, task: dict) -> list[str]:
+    """前置任务里还没 completed 的（含已归档的 completed，find_task_dir 两处都找）。"""
+    out: list[str] = []
+    for dep in task.get("depends_on") or []:
+        status = repo.load_task(dep)["status"]
+        if status != "completed":
+            out.append(f"{dep}={status}")
+    return out
+
+
 def parse_scopes(values: list[str] | None) -> list[str]:
     """把可重复的 --scope（每个可含逗号）摊平去重，保持顺序。"""
     out: list[str] = []
@@ -1078,6 +1121,21 @@ def brief_text(cfg: dict, task: dict) -> str:
     run_id = (dispatches[-1].get("run_id") if dispatches else None) or "<run_id>"
     where = (f"上报目标：Orca run:{run_id}（协议头放 --subject，正文放 --body）" if orca
              else f"上报目标：hcom @{cfg['foreman_name']}（协议头放消息正文首行）")
+    deps_list = task.get("depends_on") or []
+    deps = (f"\n前置任务（已完成、产物已合进 {base}）：" + "、".join(deps_list) + "\n"
+            ) if deps_list else ""
+    items = [it for it in (task.get("items") or []) if it.get("accept")]
+    items_block = ""
+    if items:
+        rows = []
+        for i, it in enumerate(items, start=1):
+            title = it.get("title") or f"子项 {i}"
+            rows.append(f"{i}. {title}\n   - 验收：`{it['accept']}`")
+        items_block = ("\n## 子项（按顺序做，每项一个 commit，逐项跑完再下一项）\n\n"
+                       + "\n".join(rows) + "\n\n全部做完再发 DONE，DONE 正文列出每个子项对应的 commit。\n")
+    notes = task.get("retry_notes") or []
+    retry = (f"\n## 重派说明（第 {task['attempts'] + 1} 次尝试）\n\n"
+             f"上一次失败后主管改了：{notes[-1]['note']}\n") if notes else ""
     proto_head = ("`--subject` 必须是 `[FOREMAN:<TYPE>] task={tid} dispatch=<dispatch-id>`"
                   if orca else
                   "消息正文首行必须是 `[FOREMAN:<TYPE>] task={tid} dispatch=<dispatch-id>`")
@@ -1095,8 +1153,8 @@ def brief_text(cfg: dict, task: dict) -> str:
 ## 范围（只允许改动以下路径）
 
 {scope}
-
-{f"## 补充说明\\n\\n{task['notes']}\\n" if task.get("notes") else ""}## 完成定义（验收命令，完成后必须在 worktree 内真实跑过）
+{deps}
+{items_block}{f"## 补充说明\\n\\n{task['notes']}\\n" if task.get("notes") else ""}{retry}## 完成定义（验收命令，完成后必须在 worktree 内真实跑过）
 
 ```bash
 {task.get('acceptance') or '（主管尚未定义；开工前先通过 ASK 索要）'}
@@ -1176,7 +1234,8 @@ def decisions_index_report(decisions_dir: Path) -> dict:
                 "entries": 0, "orphans": [], "dead": []}
     entries_text = _decision_entries(readme)
     if not entries_text:
-        return {"missing_index": False, "unreadable": True, "files": len(files),
+        # 新项目就是空索引：0 条条目 + 0 份决策是正常态；有决策却解析不出才是格式问题
+        return {"missing_index": False, "unreadable": bool(files), "files": len(files),
                 "entries": 0, "orphans": [], "dead": []}
     base = readme.parent.resolve()
     entries, dead, linked = 0, [], set()
@@ -1356,11 +1415,29 @@ def cmd_init(args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------- 命令：task
 
 
+def parse_depends_on(values: list[str] | None) -> list[str]:
+    """--depends-on 可重复、可逗号分隔；去重保序。"""
+    out: list[str] = []
+    for raw in values or []:
+        for part in str(raw).split(","):
+            item = part.strip()
+            if item and item not in out:
+                out.append(item)
+    return out
+
+
 def cmd_task_new(args: argparse.Namespace) -> int:
     repo = Repo(Path(args.repo))
     assert_coordinator(repo, effective_config(repo))
     cfg = effective_config(repo)
     task_id = repo.next_task_id()
+    items, items_acceptance = build_items(args.item, args.accept)
+    notes_out = []
+    if not items_acceptance:
+        notes_out.append("注意：未定义验收命令，dispatch 前用 task set-acceptance 补上")
+    if items:
+        notes_out.append(f"{len(items)} 个子项逐项验收")
+    items_note = "；".join(notes_out)
     task = {
         "id": task_id,
         "title": args.title,
@@ -1368,11 +1445,13 @@ def cmd_task_new(args: argparse.Namespace) -> int:
         "spec": args.spec,
         "agent": args.agent,  # None = dispatch 时按主管会话决定
         "scope": parse_scopes(args.scope),
-        "acceptance": args.accept,
+        "acceptance": items_acceptance,
+        "items": items,
         "notes": args.notes,
         "goal": args.goal or args.title,
+        "depends_on": parse_depends_on(args.depends_on),
         "docs": {"progress": None, "decisions": []},
-        "status": "ready" if args.accept else "pending",
+        "status": "ready" if items_acceptance else "pending",
         "attempts": 0,
         "dispatches": [],
         "asks": [],
@@ -1389,7 +1468,7 @@ def cmd_task_new(args: argparse.Namespace) -> int:
     write_json(tdir / "task.json", task)
     write_text(tdir / "brief.md", brief_text(cfg, task))
     emit(args, {"id": task_id, "status": task["status"], "dir": str(tdir)},
-         f"已创建 {task_id}（{task['status']}）：{tdir}\n{'' if args.accept else '注意：未定义验收命令，dispatch 前用 task set-acceptance 补上'}")
+         f"已创建 {task_id}（{task['status']}）：{tdir}\n{items_note}")
     return EXIT_OK
 
 
@@ -1398,6 +1477,7 @@ def cmd_task_set_acceptance(args: argparse.Namespace) -> int:
     assert_coordinator(repo, effective_config(repo))
     task = repo.load_task(args.task_id)
     task["acceptance"] = args.accept
+    task["items"] = []  # 单条命令替换掉子项清单，避免两份验收口径打架
     if task["status"] == "pending":
         repo.set_status(task, "ready")
         repo.log_task(task, "ready", f"定义验收命令：{args.accept}")
@@ -1504,9 +1584,23 @@ def cmd_dispatch(args: argparse.Namespace) -> int:
         repo.save_task(task)
         fail(f"任务 {task['id']} 已尝试 {task['attempts']}/{max_attempts} 次，进入 blocked，不得继续自动重派")
 
+    is_retry = task["status"] == "failed"
+    unmet = unmet_dependencies(repo, task)
+    if unmet:
+        fail(f"前置任务未完成：{'、'.join(unmet)}；depends_on 只做门槛不做调度，先合并前置再派工")
+    conflicts = scope_conflicts(repo, task)
+    if conflicts and not args.allow_overlap:
+        fail("scope 与在跑任务相交，并行会撞同一批文件：" + "；".join(conflicts[:5])
+             + "（确要并行且已知怎么收合并冲突，加 --allow-overlap）")
+    retry_note = (args.retry_note or "").strip()
+    if is_retry and not retry_note:
+        fail(f"任务 {task['id']} 是重派：必须在 --retry-note 里写清这次改了什么"
+             "（缩 scope / 补背景 / 换 agent / 换验收口径），原样重派只会再失败一次")
+    if retry_note:
+        task.setdefault("retry_notes", []).append({"at": now_iso(), "note": retry_note})
+
     wt = repo.worktrees_dir / task["id"]
     branch = f"foreman/{task['id']}-{task['slug']}"
-    is_retry = task["status"] == "failed"
 
     dispatch_id = repo.next_dispatch_id(task)
     worker_handle = f"w-{task['id']}"
@@ -1843,6 +1937,45 @@ def run_acceptance(repo: Repo, cmd: str, cwd: Path, task_id: str, label: str) ->
             "stdout_tail": proc.stdout[-2000:], "stderr_tail": proc.stderr[-2000:]}
 
 
+def acceptance_items(task: dict) -> list[dict]:
+    """验收项：有 items 就逐项跑，否则退回单条 acceptance（老任务兼容）。"""
+    items = [it for it in (task.get("items") or []) if it.get("accept")]
+    if items:
+        return items
+    if task.get("acceptance"):
+        return [{"title": None, "accept": task["acceptance"]}]
+    return []
+
+
+def run_acceptance_set(repo: Repo, task: dict, cwd: Path, label: str) -> list[dict]:
+    """逐项跑验收，每项各存一份证据（acceptance-<label>-NN.log），失败项单独可见。"""
+    results: list[dict] = []
+    items = acceptance_items(task)
+    for i, item in enumerate(items, start=1):
+        # 单条验收保持老证据名（acceptance-<dispatch>.log），多条才带序号
+        tag = label if len(items) == 1 else f"{label}-{i:02d}"
+        res = run_acceptance(repo, item["accept"], cwd, task["id"], tag)
+        res["index"] = i
+        res["title"] = item.get("title")
+        results.append(res)
+    return results
+
+
+def build_items(titles: list[str] | None, accepts: list[str] | None) -> tuple[list[dict], str | None]:
+    """把 --item / --accept 按顺序配对成子项；单条验收命令保持老形态（items 为空）。"""
+    ts = [t.strip() for t in (titles or []) if str(t).strip()]
+    as_ = [a.strip() for a in (accepts or []) if str(a).strip()]
+    if ts and len(ts) != len(as_):
+        fail(f"--item 与 --accept 数量不一致：{len(ts)} 个标题 vs {len(as_)} 条验收命令；"
+             "每个子项配一条命令，顺序对应")
+    if not as_:
+        return [], None
+    if len(as_) == 1 and not ts:
+        return [], as_[0]
+    items = [{"title": ts[i] if ts else None, "accept": as_[i]} for i in range(len(as_))]
+    return items, " && ".join(as_)
+
+
 def cmd_review(args: argparse.Namespace) -> int:
     repo = Repo(Path(args.repo))
     cfg = effective_config(repo)
@@ -1867,13 +2000,13 @@ def cmd_review(args: argparse.Namespace) -> int:
         {"name": "no-skip", "ok": not skips, "detail": "; ".join(skips[:5]) if skips else "未发现跳测试/--no-verify 痕迹"},
         {"name": "non-empty", "ok": bool(files), "detail": f"{shortstat or '无改动'}"},
     ]
-    acceptance = None
-    if task.get("acceptance"):
-        acceptance = run_acceptance(repo, task["acceptance"], wt, task["id"], safe_name(dispatch["id"]))
-        checks.append({"name": "acceptance", "ok": acceptance["exit"] == 0,
-                       "detail": f"{task['acceptance']} exit={acceptance['exit']}"})
-    else:
+    acceptances = run_acceptance_set(repo, task, wt, safe_name(dispatch["id"]))
+    if not acceptances:
         checks.append({"name": "acceptance", "ok": False, "detail": "任务未定义验收命令"})
+    for res in acceptances:
+        label = f"acceptance:{res['index']}" + (f" {res['title']}" if res.get("title") else "")
+        checks.append({"name": label, "ok": res["exit"] == 0,
+                       "detail": f"{res['cmd']} exit={res['exit']}"})
 
     # Ask-first（原 T3）裁决必须落决策库：过程态会消失，决策库不会（AGENTS.md §5）
     t3 = [x for x in task.get("decisions", []) if x.get("level") == "T3"]
@@ -1895,7 +2028,8 @@ def cmd_review(args: argparse.Namespace) -> int:
 
     review = {
         "at": now_iso(), "dispatch": dispatch["id"], "files": files, "shortstat": shortstat,
-        "checks": checks, "acceptance": acceptance,
+        "checks": checks, "acceptance": acceptances[0] if acceptances else None,
+        "acceptances": acceptances,
         "manual_items": [
             ("五轴读 diff：正确性（边界/错误路径/测试是否测行为）、可读性、架构（是否跟既有模式、"
              "有无近重复、有无为将来加的抽象）、安全、性能"),
@@ -1912,7 +2046,8 @@ def cmd_review(args: argparse.Namespace) -> int:
     ok = all(c["ok"] for c in checks)
     if ok:
         repo.set_status(task, "merge_ready")
-        repo.log_task(task, "merge_ready", f"审查通过：{shortstat}；验收 exit=0")
+        repo.log_task(task, "merge_ready",
+                      f"审查通过：{shortstat}；验收 {len(acceptances)} 项全过")
     else:
         if task["attempts"] >= cfg.get("max_attempts", 3):
             repo.set_status(task, "blocked")
@@ -1963,19 +2098,20 @@ def cmd_merge(args: argparse.Namespace) -> int:
 
     merge_msg = f"Merge {branch}: {task['title']} (foreman {task['id']}/{dispatch['id']})"
     repo.git("merge", "--no-ff", branch, "-m", merge_msg)
-    acceptance = None
-    if task.get("acceptance"):
-        acceptance = run_acceptance(repo, task["acceptance"], repo.root, task["id"], f"post-merge-{safe_name(dispatch['id'])}")
-        if acceptance["exit"] != 0:
-            repo.log_task(task, "merge-verify-failed",
-                          f"合并后复跑验收失败 exit={acceptance['exit']}；保持 merge_ready，人工决定回退或修复")
-            repo.save_task(task)
-            fail("合并后复跑验收未通过：合并提交已存在，任务保持 merge_ready；"
-                 "请人工决定 revert 或在 base 上修复（不要自动重跑）", EXIT_ERROR)
+    acceptances = run_acceptance_set(repo, task, repo.root, f"post-merge-{safe_name(dispatch['id'])}")
+    failed = [r for r in acceptances if r["exit"] != 0]
+    if failed:
+        which = "；".join(f"第 {r['index']} 项 {r.get('title') or ''} exit={r['exit']}".strip() for r in failed)
+        repo.log_task(task, "merge-verify-failed",
+                      f"合并后复跑验收失败：{which}；保持 merge_ready，人工决定回退或修复")
+        repo.save_task(task)
+        fail(f"合并后复跑验收未通过（{which}）：合并提交已存在，任务保持 merge_ready；"
+             "请人工决定 revert 或在 base 上修复（不要自动重跑）", EXIT_ERROR)
     merge_commit = repo.git("rev-parse", "--short", "HEAD").strip()
     task["merge"] = {
         "at": now_iso(), "branch": branch, "commit": merge_commit,
-        "acceptance": acceptance, "dispatch": dispatch["id"],
+        "acceptance": acceptances[0] if acceptances else None,
+        "acceptances": acceptances, "dispatch": dispatch["id"],
     }
     repo.set_status(task, "completed")
     repo.log_task(task, "completed", f"合并 {merge_commit}，复跑验收通过，开始清理")
@@ -2036,6 +2172,17 @@ def cmd_report(args: argparse.Namespace) -> int:
         files = sorted(p.name for p in (d / "evidence").glob("*")) if (d / "evidence").exists() else []
         return "\n".join(f"- evidence/{f}" for f in files) or "- 无"
 
+    items = [it for it in (task.get("items") or []) if it.get("accept")]
+    item_rows = []
+    if items:
+        got = {r["index"]: r for r in (review.get("acceptances") or merge.get("acceptances") or [])}
+        for i, it in enumerate(items, start=1):
+            res = got.get(i) or {}
+            verdict = "未跑" if not res else ("通过" if res["exit"] == 0 else f"失败 exit={res['exit']}")
+            item_rows.append(f"| {i} | {it.get('title') or '（无标题）'} | `{it['accept']}` | {verdict} |")
+    items_block = ("## 子项\n\n| # | 子项 | 验收 | 结果 |\n|---|---|---|---|\n"
+                   + "\n".join(item_rows) + "\n\n") if item_rows else ""
+
     acc_summary = []
     for lg in acc_logs:
         first = lg.read_text(encoding="utf-8").splitlines()
@@ -2052,7 +2199,7 @@ def cmd_report(args: argparse.Namespace) -> int:
 - 生成时间：{now_iso()}
 - 分支：{branch}｜合并提交：{merge.get('commit', '（未合并）')}｜改动面：{review.get('shortstat', '（未审查）')}
 
-## 验证方式（可复现）
+{items_block}## 验证方式（可复现）
 
 {chr(10).join(acc_summary) or '- 无验收记录'}
 
@@ -2125,9 +2272,13 @@ def build_parser() -> argparse.ArgumentParser:
     sp2.add_argument("--spec", help="规格文档路径")
     sp2.add_argument("--scope", action="append",
                      help="允许改动的路径，可多次传或逗号分隔；缺省=全库")
-    sp2.add_argument("--accept", help="验收命令（在 worktree 内运行）")
+    sp2.add_argument("--accept", action="append",
+                     help="验收命令（在 worktree 内运行）；给多条即按子项逐项验收")
+    sp2.add_argument("--item", action="append", help="子项标题（与 --accept 按顺序配对）")
     sp2.add_argument("--agent", help="worker agent，默认取 config")
     sp2.add_argument("--notes", help="补充说明")
+    sp2.add_argument("--depends-on", action="append",
+                     help="前置任务 id（可逗号分隔或重复给）：未 completed 时 dispatch 拒绝")
     add_json(sp2)
     sp2.set_defaults(func=cmd_task_new)
 
@@ -2169,6 +2320,9 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--repo", default=".")
     sp.add_argument("--agent", help="worker agent，默认取任务/config")
     sp.add_argument("--headless", action="store_true", help="无终端环境必须显式开启")
+    sp.add_argument("--retry-note", help="重派时必须写：这次改了什么（进派工单，worker 能看到）")
+    sp.add_argument("--allow-overlap", action="store_true",
+                    help="scope 与在跑任务相交仍要派工（已知如何处理合并冲突才用）")
     add_json(sp)
     sp.set_defaults(func=cmd_dispatch)
 
