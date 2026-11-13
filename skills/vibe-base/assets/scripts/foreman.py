@@ -276,7 +276,9 @@ class Repo:
     def load_or_default_config(self) -> dict:
         branch = self.current_branch() if self.is_git_repo() else ""
         defaults = {
-            "foreman_name": "foreman",
+            # 名字是 hcom 机器级寻址：同机两个仓都用默认名会互相取走回执，
+            # 因此默认带仓库目录名（init 写进 config 后就不再变）
+            "foreman_name": f"{slugify(self.root.name)}-foreman",
             "tag": "foreman",
             "default_agent": "codex",
             "base": branch or "main",
@@ -645,7 +647,41 @@ class Hcom(Transport):
                            "detail": "当前会话未接入 hcom（主管必须由 hcom 启动）" if ident is None
                                      else f"本会话身份：{ident.get('name')}",
                            "fix": "退出后用 hcom codex / hcom pi / hcom start 重启会话" if ident is None else ""})
+            checks.append(self._name_owner_check())
+            if ident is not None:
+                actual = ident.get("name")
+                mismatch = bool(actual) and actual != self.foreman_name
+                checks.append({"name": "hcom-address", "ok": not mismatch,
+                               "detail": (f"本会话实际名 {actual} ≠ 配置 {self.foreman_name}："
+                                          f"worker 会发到 @{self.foreman_name}，本会话收不到")
+                                         if mismatch else f"配置名 {self.foreman_name} 与本会话一致",
+                               "fix": f"init --foreman-name {actual}" if mismatch else ""})
         return checks
+
+    def _name_owner_check(self) -> dict:
+        """同名实例若挂在别的仓库目录下，回执会被那个仓的主管取走（同机多仓并行的经典翻车）。"""
+        name = self.foreman_name
+        proc = self._run("list", "--json", timeout=120)
+        if proc.returncode != 0:
+            return {"name": "hcom-name", "ok": False,
+                    "detail": f"hcom list 失败，无法确认 {name} 是否被别的仓占用",
+                    "fix": (proc.stderr or proc.stdout).strip()[:120]}
+        try:
+            items = json.loads((proc.stdout or "").strip().splitlines()[-1])
+        except (ValueError, IndexError):
+            return {"name": "hcom-name", "ok": False, "detail": f"hcom list 回执不是 JSON，无法确认 {name} 归属",
+                    "fix": "手工运行 hcom list --json 核对"}
+        if not isinstance(items, list):
+            items = items.get("instances") or []
+        root = str(self.repo.root)
+        foreign = [x for x in items if isinstance(x, dict) and x.get("name") == name
+                   and not str(x.get("directory") or "").startswith(root)]
+        if not foreign:
+            return {"name": "hcom-name", "ok": True, "detail": f"{name} 未被其它仓占用", "fix": ""}
+        where = foreign[0].get("directory")
+        return {"name": "hcom-name", "ok": False,
+                "detail": f"{name} 已被 {where} 的会话占用：worker 的 DONE/ASK 会串到那个仓",
+                "fix": f"init --foreman-name {slugify(self.repo.root.name)}-foreman（改名后重启会话），或等那个会话结束"}
 
 
 class Orca(Transport):

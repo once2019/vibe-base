@@ -6,6 +6,10 @@
 > 理念与"什么时候不该用"见 `docs/governance/orchestration-doctrine.md`；派工单写法见 `docs/governance/dispatch-template.md`；
 > Orca 排障见 `docs/governance/orchestration-orca.md`（仅人工介入时读）。控制面脚本：`scripts/foreman.py`（纯标准库）。
 
+## 同机多仓并行
+
+`foreman_name` 是 hcom 的机器级寻址名，不是仓库标识。两个仓同时派工且名字相同，worker 的 `[FOREMAN:DONE] task=T-001` 会被另一个仓的主管取走，而两个仓的任务号都从 `T-001` 起。默认名带仓库目录名（init 时写进 `config.json`），改名用 `init --foreman-name <名字>`。`doctor` 的 `hcom-name` 查这个名字是否被别的目录占用、`hcom-address` 查本会话实际名与配置是否一致，任一条 FAIL 就不要派工。Orca 通道按 run_id 与 worker handle 寻址，不受影响。
+
 ## 一次闭环
 
 人类给目标 → 主管拆任务/写派工单 → worker 在独立 worktree 实现 → 主管审 diff + 跑验收 → 合并删树 → 竣工单（即 `docs/progress/` 进度文件）。

@@ -933,6 +933,71 @@ class TestDoctorOrcaRepo(TempGitRepoMixin):
         self.assertFalse(checks["orca-repo"]["ok"])
 
 
+class TestDoctorHcomName(TempGitRepoMixin):
+    """同机多仓并行：名字被别的仓占用会让 worker 回执串线，doctor 必须拦住。"""
+
+    def _set_list(self, items: list[dict]) -> None:
+        os.environ["FAKE_HCOM_LIST"] = json.dumps(items)
+        self.addCleanup(os.environ.pop, "FAKE_HCOM_LIST", None)
+
+    def _checks(self, cfg: dict | None = None) -> dict[str, dict]:
+        cfg = cfg or self.repo.config()
+        return {c["name"]: c for c in foreman.Hcom(self.repo, cfg).doctor_checks(self.repo, cfg)}
+
+    def test_name_owned_by_other_repo_fails(self) -> None:
+        name = self.repo.config()["foreman_name"]
+        self._set_list([{"name": name, "directory": "/tmp/other-repo"}])
+        checks = self._checks()
+        self.assertFalse(checks["hcom-name"]["ok"], checks["hcom-name"]["detail"])
+        self.assertIn("/tmp/other-repo", checks["hcom-name"]["detail"])
+        self.assertIn("--foreman-name", checks["hcom-name"]["fix"])
+
+    def test_name_in_this_repo_passes(self) -> None:
+        name = self.repo.config()["foreman_name"]
+        self._set_list([{"name": name, "directory": str(self.root)}])
+        self.assertTrue(self._checks()["hcom-name"]["ok"])
+
+    def test_own_worktree_is_not_foreign(self) -> None:
+        name = self.repo.config()["foreman_name"]
+        self._set_list([{"name": name, "directory": str(self.root / ".vibe" / "worktrees" / "T-001")}])
+        self.assertTrue(self._checks()["hcom-name"]["ok"])
+
+    def test_unparsable_list_fails_visible(self) -> None:
+        os.environ["FAKE_HCOM_LIST"] = "not json"
+        self.addCleanup(os.environ.pop, "FAKE_HCOM_LIST", None)
+        self.assertFalse(self._checks()["hcom-name"]["ok"])
+
+    def test_session_name_mismatch_fails(self) -> None:
+        cfg = dict(self.repo.config(), foreman_name="someone-else-foreman")
+        foreman.write_json(self.repo.config_path, cfg)
+        checks = self._checks(cfg)
+        self.assertFalse(checks["hcom-address"]["ok"])
+        self.assertIn("someone-else-foreman", checks["hcom-address"]["detail"])
+        self.assertIn("init --foreman-name foreman", checks["hcom-address"]["fix"])
+
+    def test_session_name_match_passes(self) -> None:
+        name = self.repo.config()["foreman_name"]
+        os.environ["FAKE_HCOM_SELF_NAME"] = name
+        self.addCleanup(os.environ.pop, "FAKE_HCOM_SELF_NAME", None)
+        self.assertTrue(self._checks()["hcom-address"]["ok"])
+
+
+class TestDefaultForemanName(unittest.TestCase):
+    """默认名字带仓库标识：同机两个仓 init 后不再同名。"""
+
+    def test_default_name_carries_repo_slug(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="My-Repo-") as td:
+            cfg = foreman.Repo(Path(td)).load_or_default_config()
+            self.assertNotEqual(cfg["foreman_name"], "foreman")
+            self.assertEqual(cfg["foreman_name"], foreman.slugify(Path(td).name) + "-foreman")
+
+    def test_two_repos_get_different_names(self) -> None:
+        with tempfile.TemporaryDirectory() as a, tempfile.TemporaryDirectory() as b:
+            na = foreman.Repo(Path(a)).load_or_default_config()["foreman_name"]
+            nb = foreman.Repo(Path(b)).load_or_default_config()["foreman_name"]
+            self.assertNotEqual(na, nb)
+
+
 class TestAgentDetection(unittest.TestCase):
     """会话 agent 探测：进程祖先链优先（不会被父会话环境继承污染），环境标记兜底。"""
 

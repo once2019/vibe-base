@@ -5,6 +5,8 @@
 - FAKE_HCOM_LOG      argv 追加记录文件（JSON Lines），必设
 - FAKE_HCOM_EVENT    events --wait 命中时输出的 JSON 事件文件；未设则超时
 - FAKE_HCOM_LAUNCH   launch 回执 JSON 文件；未设则用默认成功回执
+- FAKE_HCOM_LIST     `list --json` 输出的实例表（JSON 字符串）；未设则空表
+- FAKE_HCOM_SELF_NAME  `list self` 报告的实例名，默认 foreman
 """
 
 import json
@@ -21,13 +23,13 @@ def main() -> int:
 
     if argv[0] == "list":
         if argv[1:2] == ["self"]:
-            ident = {"name": "foreman", "status": "active"}
+            ident = {"name": os.environ.get("FAKE_HCOM_SELF_NAME", "foreman"), "status": "active"}
             tool = os.environ.get("FAKE_HCOM_TOOL", "codex")
             if tool:
                 ident["tool"] = tool
             print(json.dumps(ident))
             return 0
-        print("[]")
+        print(os.environ.get("FAKE_HCOM_LIST") or "[]")
         return 0
 
     if argv[0] == "send":
