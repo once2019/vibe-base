@@ -728,11 +728,15 @@ def reconcile_findings(repo: Repo, cfg: dict, timeout: int = 30,
                 findings.append(dict(base, level="fail",
                                      problem=f"Orca 报 failed，状态机仍停在 {row['task_status']}",
                                      hint="worker-read 看失败原因，再 task abandon 或 dispatch --retry-note 重派"))
-            elif state == "ready" and live != "live":
+            elif state == "ready" and live == "exited":
                 findings.append(dict(base, level="fail",
-                                     problem=f"worker 已退出（liveness={live}）但任务仍 {row['task_status']}："
-                                             "结束回合未上报",
+                                     problem=f"worker 已退出但任务仍 {row['task_status']}：结束回合未上报",
                                      hint="worker-read --source terminal 看它停在哪；补发 DONE 或 dispatch 重派"))
+            elif state == "ready" and live not in ("live", ""):
+                # unverifiable 只是探测不了（如远端终端），不是退出的证据——warn 不 fail
+                findings.append(dict(base, level="warn",
+                                     problem=f"liveness={live}，无法确认 worker 是否还活着（任务 {row['task_status']}）",
+                                     hint="worker-list --include-remote 或 worker-read 复核"))
     messages = transport.inbox(timeout=timeout)
     if len(messages) >= 100:
         findings.append({"level": "warn", "task": "-", "dispatch": "-",
@@ -748,8 +752,8 @@ def reconcile_findings(repo: Repo, cfg: dict, timeout: int = 30,
         if not kind:
             continue
         task_id, dispatch_id = hit.group(2), hit.group(3)
-        evidence = repo.tasks_dir / safe_name(task_id) / "evidence" / f"{kind}-{safe_name(dispatch_id)}.md"
-        if not (repo.tasks_dir / safe_name(task_id)).is_dir() or evidence.exists():
+        evidence = repo.task_dir(task_id) / "evidence" / f"{kind}-{safe_name(dispatch_id)}.md"
+        if not repo.task_dir(task_id).is_dir() or evidence.exists():
             continue
         findings.append({"level": "fail", "task": task_id, "dispatch": dispatch_id,
                          "problem": f"{hit.group(1)} 消息已被读走（read=1）却没有落进状态机（缺 {evidence.name}）",
@@ -1076,8 +1080,9 @@ class Orca(Transport):
     def wait_message(self, timeout: int) -> dict:
         """check --wait：JSON 在 stdout，keepalive 在 stderr（不干扰解析）。
 
-        批次里非协议消息（heartbeat/status/escalation）会被 check 标为已处理，
-        因此落一行日志保持可追溯，不静默丢弃。
+        批次里非协议消息（heartbeat/status）会被 check 标为已处理，
+        因此落一行日志保持可追溯，不静默丢弃。escalation 是协议级信号，
+        但排在协议头与 Rejected 之后——同批有协议消息时以协议消息为准。
         """
         proc = self._run("orchestration", "check", "--wait", "--timeout-ms", str(timeout * 1000),
                          "--json", timeout=timeout + 60)
@@ -1090,26 +1095,38 @@ class Orca(Transport):
         def as_text(msg: dict) -> str:
             return "\n".join(x for x in (msg.get("subject"), msg.get("body")) if x)
 
-        # Orca 的 escalation 没有 [FOREMAN:*] 头，但 payload 带 taskId/dispatchId/stopReason：
-        # 这是"worker 结束回合未上报"的唯一权威信号，当普通消息跳过会让任务永远停在 running。
-        for m in msgs:
-            if str(m.get("type")) == "escalation":
-                payload = m.get("payload")
-                if isinstance(payload, str):
-                    try:
-                        payload = json.loads(payload)
-                    except ValueError:
-                        payload = {}
-                payload = payload if isinstance(payload, dict) else {}
-                return {"escalation": {
-                    "id": m.get("id") or m.get("messageId"),
+        def escalation_event(m: dict) -> dict:
+            payload = m.get("payload")
+            if isinstance(payload, str):
+                try:
+                    payload = json.loads(payload)
+                except ValueError:
+                    payload = {}
+            payload = payload if isinstance(payload, dict) else {}
+            return {"id": m.get("id") or m.get("messageId"),
                     "from": m.get("from") or m.get("from_handle") or "?",
                     "orchestration_task": payload.get("taskId"),
                     "orchestration_dispatch": payload.get("dispatchId"),
                     "stop_reason": payload.get("stopReason"),
                     "subject": str(m.get("subject") or "")[:200],
-                    "body": str(m.get("body") or ""),
-                }}
+                    "body": str(m.get("body") or "")}
+
+        # 协议消息优先：check 是消费式的，批内所有消息读完即失效；
+        # escalation 若抢先 return，同批的 [FOREMAN:DONE]/[FOREMAN:ASK] 会被静默丢掉
+        #（T-010 实测 ASK 与 escalation 只隔 11 秒，完全会同批到达）。
+        for i, msg in enumerate(msgs):
+            text = as_text(msg)
+            if header_candidates(text):
+                # 本批其余消息不会再出现，必须留档，不能静默丢
+                rest = msgs[:i] + msgs[i + 1:]
+                extra = []
+                if rest:
+                    self._log_unhandled(rest)
+                    extra = [m.get("type") for m in rest]
+                return {"id": msg.get("id") or msg.get("messageId"),
+                        "instance": msg.get("from") or msg.get("sender") or "?",
+                        "data": {"text": text, "from": msg.get("from") or "?"},
+                        **({"batch_extra": extra} if extra else {})}
 
         # 通道拒收（例如 worker_done 缺 taskId）的 subject 会被加上 "Rejected " 前缀，
         # 协议头正则匹配不到；当成普通非协议消息跳过会让主管一直等到超时。
@@ -1122,19 +1139,15 @@ class Orca(Transport):
                                  "subject": str(m.get("subject") or "")[:200],
                                  "count": len(rejected)}}
 
-        for i, msg in enumerate(msgs):
-            text = as_text(msg)
-            if header_candidates(text):
-                # check 是消费式的：本批其余消息不会再出现，必须留档，不能静默丢
-                rest = msgs[:i] + msgs[i + 1:]
-                extra = []
-                if rest:
-                    self._log_unhandled(rest)
-                    extra = [m.get("type") for m in rest]
-                return {"id": msg.get("id") or msg.get("messageId"),
-                        "instance": msg.get("from") or msg.get("sender") or "?",
-                        "data": {"text": text, "from": msg.get("from") or "?"},
-                        **({"batch_extra": extra} if extra else {})}
+        # Orca 的 escalation 没有 [FOREMAN:*] 头，但 payload 带 taskId/dispatchId/stopReason：
+        # 这是"worker 结束回合未上报"的唯一权威信号，当普通消息跳过会让任务永远停在 running。
+        # 批内没有协议消息才轮到它；同批其余消息（协议之外）留档 batch-unhandled.log。
+        escalations = [m for m in msgs if str(m.get("type")) == "escalation"]
+        if escalations:
+            rest = [m for m in msgs if str(m.get("type")) != "escalation"]
+            if rest:
+                self._log_unhandled(rest)
+            return {"escalation": escalation_event(escalations[0])}
         if msgs:
             self._log_skipped(msgs)
             return {"timed_out": True,
@@ -1240,12 +1253,16 @@ class Orca(Transport):
             if reachable:
                 rows = open_dispatches(repo)
                 odd = reconcile_findings(repo, cfg, timeout=30, transport=self) if rows else []
-                checks.append({"name": "orchestration-reconcile", "ok": not odd,
-                               "detail": (f"{len(odd)} 个在途 dispatch 与 Orca 状态不一致："
-                                          + odd[0]["task"] + "/" + str(odd[0]["dispatch"]) + " "
-                                          + odd[0]["problem"]) if odd else
-                                         f"{len(rows)} 个在途 dispatch 与 Orca 状态一致",
-                               "fix": "foreman.py reconcile 看明细（消息可能已被旁路消费）" if odd else ""})
+                fails = [f for f in odd if f["level"] == "fail"]
+                warns = [f for f in odd if f["level"] != "fail"]
+                head = (fails[0]["task"] + "/" + str(fails[0]["dispatch"]) + " " + fails[0]["problem"]
+                        if fails else (warns[0]["task"] + "/" + str(warns[0]["dispatch"]) + " "
+                                       + warns[0]["problem"] if warns else ""))
+                checks.append({"name": "orchestration-reconcile", "ok": not fails,
+                               "detail": (f"{len(fails)} fail / {len(warns)} warn 与 Orca 状态不一致：{head}"
+                                          if odd else
+                                          f"{len(rows)} 个在途 dispatch 与 Orca 状态一致"),
+                               "fix": "foreman.py reconcile 看明细（消息可能已被旁路消费）" if fails else ""})
         return checks
 
     def cleanup(self, repo: Repo, dispatch: dict) -> list[str]:
@@ -1470,8 +1487,9 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
     findings = reconcile_findings(repo, cfg, timeout=args.timeout)
     fails = [f for f in findings if f["level"] == "fail"]
     rows = open_dispatches(repo)
+    skipped = bool(rows) and not any(orca_dispatch_key(r["record"]) for r in rows)
     if args.json:
-        print(json.dumps({"ok": not fails, "open_dispatches": len(rows),
+        print(json.dumps({"ok": not fails, "open_dispatches": len(rows), "skipped": skipped,
                           "findings": findings}, ensure_ascii=False, indent=2))
     else:
         orca_rows = [r for r in rows if orca_dispatch_key(r["record"])]
@@ -1978,6 +1996,11 @@ def apply_protocol_event(repo: Repo, cfg: dict, event: dict) -> dict:
             repo.log_task(task, task["status"], f"{dref} 结束回合等待答复（escalation 同源，不降级）")
             result["status"] = task["status"]
             result["hint"] = "worker 在等你的答复：reply 或 ask 后重新唤醒它"
+        elif task["status"] in ("review", "merge_ready"):
+            # 晚到的 escalation（worker_done 以普通 status 发出时 Orca 仍会报停止）：交付已在手上，别回退
+            repo.log_task(task, task["status"], f"{dref} 晚到的 escalation，任务已交付在审，忽略")
+            result["status"] = task["status"]
+            result["hint"] = "任务已在审查流程，escalation 疑为误报；可用 worker-list 复核"
         elif task["attempts"] >= cfg.get("max_attempts", 3):
             repo.set_status(task, "blocked")
             repo.log_task(task, "blocked", f"{dref} 第 {task['attempts']} 次失败，交人类")
@@ -2004,15 +2027,30 @@ def find_dispatch_by_orchestration(repo: Repo, orchestration_task: str | None,
     """用 Orca 的 taskId / dispatchId 反查本仓的 (task_id, dispatch_id)。
 
     escalation 这类通道消息只带 Orca 侧 id，没有 [FOREMAN:*] 头，靠 dispatch 记录里的
-    `orchestration_task` 与 `worker_handle` 认领。
+    `orchestration_task` 与 `worker_handle` 认领。dispatchId 指认的派工更精确，先于 taskId——
+    单 id 短路会在多次派工的任务上配错 dispatch（task 对、dispatch 错）。
     """
+    candidates: list[tuple[str, str, dict]] = []
     for tj in sorted(repo.tasks_dir.glob("*/task.json")):
         task = read_json(tj)
         for d in task.get("dispatches") or []:
-            if orchestration_task and d.get("orchestration_task") == orchestration_task:
-                return task["id"], d["id"]
-            if orchestration_dispatch and d.get("worker_handle") == f"dispatch:{orchestration_dispatch}":
-                return task["id"], d["id"]
+            candidates.append((task["id"], str(d.get("id")), d))
+    handle = f"dispatch:{orchestration_dispatch}" if orchestration_dispatch else None
+
+    def first(pred) -> tuple[str, str] | None:
+        for tid, did, d in candidates:
+            if pred(d):
+                return tid, did
+        return None
+
+    if handle:
+        got = first(lambda d: d.get("worker_handle") == handle)
+        if got:
+            return got
+    if orchestration_task:
+        got = first(lambda d: d.get("orchestration_task") == orchestration_task)
+        if got:
+            return got
     return None
 
 
@@ -2088,9 +2126,12 @@ def cmd_events(args: argparse.Namespace) -> int:
         found = find_dispatch_by_orchestration(repo, esc.get("orchestration_task"),
                                                esc.get("orchestration_dispatch"))
         if not found:
+            raw = save_evidence(repo, "_unparsed",
+                                f"escalation-{now_iso().replace(':', '')}-{safe_name(esc.get('id'))}.md",
+                                f"{esc['subject']}\n\n{esc['body']}")
             fail(f"收到 escalation（{esc['subject']}）但认不出是本仓哪个任务："
                  f"Orca task={esc.get('orchestration_task')} dispatch={esc.get('orchestration_dispatch')}。"
-                 "多半是别的仓的 worker，或任务已归档；原文见 logs/transport-skipped.log")
+                 f"多半是别的仓的 worker，或任务已归档；全文已留档 {raw}")
         task_id, dispatch_id = found
         text = (f"[FOREMAN:ESCALATE] task={task_id} dispatch={dispatch_id}\n"
                 f"{esc['subject']}\n{esc['body']}")

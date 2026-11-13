@@ -32,3 +32,19 @@
 - 涉及文件/模块：`skills/vibe-base/assets/scripts/foreman.py`、`orchestration-orca.md` 两行踩坑表
 - 兼容性影响：`events` 收到 escalation 时不再返回 `timed_out`，而是推进状态机并退出 0；`transport-skipped.log` 不再记录 escalation（其他非协议消息照旧）
 - 实测：测试 141 → 145；四处变异全部转红（escalation 上行、taskId 反查、不降级等待、prompt 带 dispatch-id）
+
+## 审查修订（同日，五轴审查发现）
+
+1. **同批消息的优先序**：escalation 原先在协议头提取之前 return，会吃掉同批的
+   `[FOREMAN:DONE]`/`[FOREMAN:ASK]`（T-010 实测 ASK 与 escalation 只隔 11 秒，会同批到达）。
+   改为协议头 → Rejected → escalation → skipped 的固定优先序。
+2. **认不出任务时先留档**：原文存 `_unparsed/evidence/escalation-*.md` 再 fail（此前指针指向
+   不存在的 skipped 日志，内容全丢）。
+3. **晚到不回退**：任务已在 review/merge_ready 时 escalation 只记日志——worker_done 以普通
+   status 发出时 Orca 仍报"stopped without reporting"，交付已在手上不能打成 failed。
+4. **反查排序**：dispatchId 先于 taskId（taskId 先命中会在多次派工的任务上配错 dispatch）。
+   同时删掉"双 id 同时匹配"的中间阶段：能同时匹配的记录必然也单匹配 handle，且 handle 排前，
+   该阶段是不可达死分支。
+
+变异确认：escalation 路径失效由 `test_escalation_is_surfaced_not_skipped` 接住；
+重排回归由 `test_protocol_message_wins_over_escalation_in_same_batch` 接住（同批 DONE 被吃即红）。

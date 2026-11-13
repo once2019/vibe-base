@@ -1164,6 +1164,49 @@ class TestReconcile(TempGitRepoMixin):
         o = self._setup({"dispatchId": "ctx_1", "state": "ready", "liveness": "live"}, [msg])
         self.assertEqual(self._findings(o), [])
 
+    def test_protocol_message_wins_over_escalation_in_same_batch(self) -> None:
+        """同批 escalation + [FOREMAN:DONE]：协议消息优先，escalation 留档不丢。
+
+        check 是消费式的：escalation 若抢先 return，同批 DONE 会静默消失（T-010 实测两条只隔 11s）。
+        """
+        o = self._setup({"dispatchId": "ctx_1", "state": "ready", "liveness": "live"})
+        batch = [{"id": "e1", "type": "escalation", "from": "term_x",
+                  "subject": "Worker stopped without reporting",
+                  "payload": json.dumps({"taskId": "task_1", "dispatchId": "ctx_1"})},
+                 {"id": "d1", "type": "status", "from": "term_x",
+                  "subject": "[FOREMAN:DONE] task=T-010 dispatch=D-001", "body": "完工"}]
+        fake = self.root / "fake-orca-batch"
+        fake.write_text("#!/bin/sh\necho '" + json.dumps({"ok": True, "result": {"messages": batch}}) + "'\n")
+        make_executable(fake)
+        o.bin = str(fake)
+        out = o.wait_message(1)
+        self.assertNotIn("escalation", out)
+        self.assertIn("[FOREMAN:DONE]", out["data"]["text"])
+        self.assertIn("escalation", out.get("batch_extra", []))
+        log = (self.root / ".vibe" / "logs" / "batch-unhandled.log").read_text(encoding="utf-8")
+        self.assertIn("Worker stopped without reporting", log)
+
+    def test_unknown_escalation_saves_evidence_before_failing(self) -> None:
+        """认不出任务的 escalation：先留档再 fail，指针指向留档文件而不是 skipped 日志。"""
+        ev = self.root / ".vibe" / "logs" / "fake-orca-event.json"
+        ev.parent.mkdir(parents=True, exist_ok=True)
+        ev.write_text(json.dumps({"id": "e9", "type": "escalation", "from": "term_x",
+                                  "subject": "Worker stopped without reporting",
+                                  "payload": json.dumps({"taskId": "task_noforun",
+                                                         "dispatchId": "ctx_noforun",
+                                                         "stopReason": "finished"})}))
+        os.environ["FAKE_ORCA_EVENT"] = str(ev)
+        self.addCleanup(os.environ.pop, "FAKE_ORCA_EVENT", None)
+        foreman.write_json(self.repo.config_path, dict(self.repo.config(), transport="orca"))
+        args = foreman.build_parser().parse_args(["events", "--repo", str(self.root)])
+        err = io.StringIO()
+        with self.assertRaises(SystemExit), contextlib.redirect_stderr(err):
+            foreman.cmd_events(args)
+        saved = list((self.repo.tasks_dir / "_unparsed" / "evidence").glob("escalation-*.md"))
+        self.assertEqual(len(saved), 1, "escalation 原文必须在 fail 前留档")
+        self.assertIn("留档", err.getvalue())
+        self.assertIn("Worker stopped without reporting", err.getvalue())
+
     def test_pretty_printed_cli_json_is_parsed(self) -> None:
         """Orca 的 `inbox --full` 是多行 pretty JSON，只取最后一行会解析失败（实机踩到）。"""
         fake = self.root / "fake-orca-pretty"
@@ -1178,6 +1221,13 @@ class TestReconcile(TempGitRepoMixin):
         self.assertEqual(len(o.workers(timeout=20, run="run_1")), 1)
         self.assertEqual(foreman.cli_json(o._run("orchestration", "worker-list", timeout=20))["ok"], True)
 
+    def test_unverifiable_liveness_is_warn_not_fail(self) -> None:
+        """liveness=unverifiable 只说明探测不了（远端终端），不是退出证据——warn 不 fail。"""
+        o = self._setup({"dispatchId": "ctx_1", "state": "ready", "liveness": "unverifiable"})
+        findings = self._findings(o)
+        self.assertEqual([f["level"] for f in findings], ["warn"])
+        self.assertIn("unverifiable", findings[0]["problem"])
+
     def test_unknown_orca_dispatch_is_warn(self) -> None:
         o = self._setup({"dispatchId": "ctx_other", "state": "ready", "liveness": "live"})
         findings = self._findings(o)
@@ -1190,6 +1240,23 @@ class TestReconcile(TempGitRepoMixin):
         task["dispatches"] = [{"id": "D-001", "worker_handle": "@worker", "worktree": "/tmp/x"}]
         foreman.write_json(self.repo.task_dir("T-001") / "task.json", task)
         self.assertEqual(self._findings(o, transport="hcom"), [])
+
+    def test_json_output_marks_skipped(self) -> None:
+        """hcom 派工时 JSON 的 skipped=true：与真通过同形会让机器消费者误读。"""
+        o = self._setup(None, transport="hcom")
+        task = foreman.read_json(self.repo.task_dir("T-001") / "task.json")
+        task["dispatches"] = [{"id": "D-001", "worker_handle": "@worker", "worktree": "/tmp/x"}]
+        foreman.write_json(self.repo.task_dir("T-001") / "task.json", task)
+        os.environ["ORCA_CLI_COMMAND"] = o.bin
+        self.addCleanup(os.environ.pop, "ORCA_CLI_COMMAND", None)
+        foreman.write_json(self.repo.config_path, dict(self.repo.config(), transport="hcom"))
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = foreman.main(["reconcile", "--repo", str(self.root), "--json"])
+        self.assertEqual(code, 0)
+        data = json.loads(out.getvalue())
+        self.assertTrue(data["skipped"])
+        self.assertTrue(data["ok"])
 
     def test_orca_dispatch_without_run_id_warns(self) -> None:
         o = self._setup(None)
@@ -1246,6 +1313,14 @@ class TestEscalation(TempGitRepoMixin):
         self.assertEqual(res["task_status"], "waiting_answer")
         self.assertIn("reply", res["hint"])
 
+    def test_late_escalation_does_not_regress_review(self) -> None:
+        """任务已进 review（DONE 已消费）后再来 escalation：只记日志，不回退成 failed。"""
+        self._task("review")
+        res = self._escalate()
+        self.assertEqual(res["task_status"], "review")
+        self.assertIn("审查", res["hint"])
+        self.assertEqual(self.repo.load_task("T-010")["status"], "review")
+
     def test_resolve_by_orchestration_ids(self) -> None:
         self._task("running")
         got = foreman.find_dispatch_by_orchestration(self.repo, "task_1", None)
@@ -1253,6 +1328,24 @@ class TestEscalation(TempGitRepoMixin):
         got = foreman.find_dispatch_by_orchestration(self.repo, None, "ctx_1")
         self.assertEqual(got, ("T-010", "D-001"))
         self.assertIsNone(foreman.find_dispatch_by_orchestration(self.repo, "task_other", "ctx_other"))
+
+    def test_resolve_prefers_dispatch_id_over_task_id(self) -> None:
+        """单 id 回退时 dispatchId 先于 taskId——taskId 先命中会在
+        多次派工的任务上配错 dispatch（task 对、dispatch 错）。"""
+        self._task("running")
+        task = foreman.read_json(self.repo.task_dir("T-010") / "task.json")
+        task["dispatches"] = [{"id": "D-001", "worker_handle": "dispatch:ctx_1",
+                               "orchestration_task": "task_1"},
+                              {"id": "D-002", "worker_handle": "dispatch:ctx_2"}]
+        foreman.write_json(self.repo.task_dir("T-010") / "task.json", task)
+        # ctx_2 的记录缺 orchestration_task：dispatchId 单独命中 D-002，而不是 taskId 命中的 D-001
+        self.assertEqual(foreman.find_dispatch_by_orchestration(self.repo, "task_1", "ctx_2"),
+                         ("T-010", "D-002"))
+        # 两条记录都齐全时，dispatchId 仍然指认 D-002 而不是 taskId 先命中的 D-001
+        task["dispatches"][1]["orchestration_task"] = "task_1"
+        foreman.write_json(self.repo.task_dir("T-010") / "task.json", task)
+        self.assertEqual(foreman.find_dispatch_by_orchestration(self.repo, "task_1", "ctx_2"),
+                         ("T-010", "D-002"))
 
     def test_prompt_carries_dispatch_id(self) -> None:
         """worker_done 要 taskId + dispatchId 两样，prompt 漏一个就会白挨一次拒收（T-009 实测）。"""

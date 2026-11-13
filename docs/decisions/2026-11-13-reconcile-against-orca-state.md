@@ -39,3 +39,11 @@
 - 兼容性影响：新增命令与新 doctor 项；`workers()` 增加可选 `run` 参数（默认行为不变）
 - 实测：测试 145 → 158；八处变异全部转红（succeeded 分支、静默死亡分支、未读过滤、evidence 豁免、run 过滤、
   整批跳过、transport 判据、cli_json 只取末行）。真机对账跑通：storyboard-maker 84 条消息 / 39 条带协议头 / 7 个 worker
+
+## 审查修订（同日，五轴审查发现）
+
+- **liveness 判定收紧**：`ready` + `liveness=exited` 才判 fail（已知退出）；
+  `unverifiable` 只是探测不了（远端终端），降为 warn，不误报"结束回合未上报"。
+- **doctor 的 ok 只看 fail 级**：warn 不再把体检打成红；detail 显示 fail/warn 计数与首条。
+- **JSON 输出加 `skipped`**：hcom 派工时与真通过区分开，机器消费者不再误读。
+- evidence 路径统一走 `repo.task_dir()`（原手拼 `safe_name(task_id)`，口径分叉）。
