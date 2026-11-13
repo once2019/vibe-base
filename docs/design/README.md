@@ -13,4 +13,4 @@
 
 一行一份：`文件名｜一句话职责`，新建即登记，更新前先查（规则见 AGENTS.md §6 权威文档唯一）。
 
-- governance-retrospective.md｜治理复盘方法论与反模式正本
+- governance-retrospective.md｜治理复盘证据链（8 反模式实测证据；运行期清单正本见 governance-review.md）
