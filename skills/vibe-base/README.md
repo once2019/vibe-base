@@ -83,6 +83,7 @@ Karpathy 观察 LLM 写代码的翻车姿势，归结成四条规则：
 | `task new` / `task set-acceptance` / `task set-scope` / `task abandon` | 建任务、改验收命令、调允许改动的范围、放弃                            |
 | `dispatch`                                                             | 建分支与 worktree，拉起 worker，然后主管结束回合                 |
 | `events`                                                               | 阻塞等一条协议消息（ASK / DONE / ESCALATE）                 |
+| `reconcile`                                                            | 任务不动时对账：在途任务 vs 通道的 dispatch 状态与消息落地            |
 | `reply`                                                                | 把裁决发回 worker；Ask-first 裁决必须带 `--decision-doc`    |
 | `ask`                                                                  | 立阻塞门，任务挂起等人                                      |
 | `review`                                                               | 取 diff、跑验收、存证据，给 `merge_ready` 或 `failed`        |

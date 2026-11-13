@@ -23,6 +23,7 @@
 | 建任务、派工、收消息、审 diff、合并、竣工单 | `foreman.py`（状态机 + evidence 是它的价值） |
 | 任务间有依赖（DAG）、按 dispatch 重试 | Orca 原生命令（foreman 不封装，见下） |
 | 判断 worker 卡死还是死循环 | `worker-read --source terminal --dispatch <id>` |
+| 状态机与 Orca 对不上（任务停在 running 没动静） | `foreman.py reconcile`（`doctor` 里是 `orchestration-reconcile` 一项） |
 
 ## 机制坑
 
@@ -35,6 +36,8 @@
 | 脚本消费主管邮件 | Orca 明确要求"只观察的脚本用 `--peek --wait`，不得 `--ack`"；用消费式 `check` 会把主管 session 的邮件拿走 | foreman 是消费式（它把内容落 evidence 与状态，信息不丢）。因此**foreman 模式下不要同时让 agent hooks 收信**：被唤醒后应运行 `foreman.py events` 而不是自己 `check`（否则会拿到空批） | 📖help 原文 + ✅E2E 亲历（唤醒后自己 check 收到的是空批） |
 | 长阻塞 `--wait` | 主管被锁十几分钟；唤醒注入可能被正在跑的命令吞掉 | 派完就结束回合。**一次 `events` 调用 = 一轮**；连续两轮空等后 `events` 自己拒绝（`MAX_EMPTY_WAITS=2`），要你结束回合。**`--timeout-ms` 没有技术硬上限**（旧技能写的 120000 是 house rule，不是限制） | ✅实测（`--timeout-ms 900000` 未被拒；上限拦截有单测） |
 | 把 `events` 当轮询 | 连着开三个窗口（420s / 540s / 540s）空转；旧条文只写「同一 dispatch 最多两轮」，没说「轮」是调用次数还是派工次数 | 规则改成按调用计数并由代码拦：连续两轮空等后第 3 次调用直接 fail，输出指明「结束回合、在 handoff 写一行在等什么」。有消息在等时仍放行（`has_pending` 探测），不会把主管锁在门外 | ✅实测（主管三次连开窗口的真实事故） |
+| 纯消息驱动会漏状态 | 消息被裸 `check` 吃走、worker 崩溃、DONE 发送失败，任务都停在 `running` 而没人知道；T-010 就这样悬了几十分钟 | `foreman.py reconcile` 拿 Orca 的权威事实对账三条：dispatch 状态（`succeeded`/`failed` 却没进状态机）、liveness（`ready` 但 worker 已退出 = 结束回合未上报）、消息落地（inbox 里 `read=1` 的 `[FOREMAN:*]` 却没有对应 evidence = 被旁路消费）。`doctor` 的 `orchestration-reconcile` 每次体检都跑 | ✅实测（T-010 三封消息实测复现） |
+| worker 用原生 `orca orchestration ask` | 它会在 worker 自己的终端里阻塞等回答，主管侧什么也收不到，foreman 也不知道它在等 | 请示一律 `[FOREMAN:ASK]`（派工 prompt 已明令）；主管侧 `ask` 会同步建原生 gate、`reply` 关掉它（两个方向都通） | 📖help + ✅`gate_create`/`gate_resolve` 已接线 |
 | 手工 `check --json` 排查 | `check` 是消费式的：主管自己跑一次，就把 worker 的 DONE 吃掉了，`events` 随后只会等到超时（真 E2E 亲历） | 主管排查用 `check --peek --json`（只读不标记）或 `--unread`；收信一律走 `foreman.py events`，不要自己 `check` | ✅实测（吃掉一封 DONE，只能让 worker 重发） |
 | `worker_done` 缺 `--task-id` / `--dispatch-id` | Orca 拒收，subject 变成 `Rejected worker_done: [FOREMAN:DONE] ...`，协议头正则匹配不到 | **两个都要带**：派工 prompt 要求先 `worker-list` 取 taskId 与 dispatchId 再发；`wait_message` 把 `Rejected` 前缀识别成 `rejected` 信号，`events` 直接报错而不是静默超时 | ✅实测（首轮 E2E 卡在缺 taskId；T-009 卡在缺 dispatchId） |
 | `worker-start --worktree current` | worker 一 `git checkout -b` 就把主管 HEAD 切走；主管的脏文件被 `add` 进提交 | 改动任务一律独立树。foreman 用 `new-top-level --repo id:<repoId>`（不依赖主管在 Orca 活跃 worktree）；`new-child` 是原生替代（多一层父子血缘） | 📖help 列出 `current|selector|new-child|new-top-level` + ⚠️切 HEAD 为旧技能记述 |

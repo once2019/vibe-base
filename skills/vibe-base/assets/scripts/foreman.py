@@ -183,6 +183,19 @@ def header_candidates(text: str) -> list[tuple[str, str, str]]:
     return seen
 
 
+def cli_json(proc: subprocess.CompletedProcess) -> dict:
+    """解析 CLI 的 --json 输出：先试整段（Orca 的 --full 是多行 pretty JSON），再退回最后一行。"""
+    raw = (proc.stdout or "").strip()
+    for candidate in (raw, raw.splitlines()[-1] if raw else ""):
+        if not candidate:
+            continue
+        try:
+            return json.loads(candidate)
+        except ValueError:
+            continue
+    return {}
+
+
 def safe_name(raw: object, limit: int = 40) -> str:
     """外部传入的标识（发送者名）不得直接拼进文件路径。"""
     return re.sub(r"[^0-9A-Za-z_.-]+", "_", str(raw or "?"))[:limit] or "?"
@@ -552,6 +565,9 @@ class Transport:
     def run_id(self, timeout: int = 60) -> str | None:
         raise NotImplementedError
 
+    def inbox(self, timeout: int = 60, limit: int = 100) -> list[dict]:
+        raise NotImplementedError
+
     def gate_create(self, orchestration_task: str, question: str, options: list[str]) -> str:
         raise NotImplementedError
 
@@ -634,6 +650,119 @@ def effective_config(repo: Repo, cfg: dict | None = None) -> dict:
     cfg["transport"] = name
     cfg["transport_source"] = source
     return cfg
+
+
+RECONCILE_OPEN_STATUSES = ("dispatched", "running", "waiting_answer", "waiting_human")
+PROTOCOL_KIND = {"ASK": "ask", "DONE": "done", "ESCALATE": "escalate"}
+
+
+def open_dispatches(repo: Repo) -> list[dict]:
+    """仍在途的 dispatch：任务状态没到 review/终态的，其派工记录都算未结算。"""
+    rows: list[dict] = []
+    for tj in sorted(repo.tasks_dir.glob("*/task.json")):
+        task = read_json(tj)
+        if task.get("status") not in RECONCILE_OPEN_STATUSES:
+            continue
+        for d in task.get("dispatches") or []:
+            rows.append({"task_id": task["id"], "task_status": task["status"],
+                         "dispatch_id": d.get("id"), "record": d})
+    return rows
+
+
+def orca_dispatch_key(record: dict) -> str | None:
+    """dispatch 记录里的 worker_handle 形如 dispatch:ctx_xxx，取出 Orca 侧的 ctx id。"""
+    handle = str(record.get("worker_handle") or "")
+    return handle.split(":", 1)[1] if handle.startswith("dispatch:") else None
+
+
+def reconcile_findings(repo: Repo, cfg: dict, timeout: int = 30,
+                       transport: Transport | None = None) -> list[dict]:
+    """把在途任务与 Orca 的权威状态对账。
+
+    纯消息驱动的盲区：消息被裸 check 旁路消费、worker 崩溃、DONE 发送失败，任务都会
+    永远停在 running 而没人知道。Orca 的 worker-list（dispatch 状态）与 inbox（消息是否
+    被读走却没落地）是权威，两者都能给出状态机漏掉的事实。
+    """
+    findings: list[dict] = []
+    by_run: dict[str, list[dict]] = {}
+    # 判据看派工记录本身：有 Orca 的 ctx id 才是 Orca 派出去的（hcom 记录是 @实例名），
+    # 与当前终端判定出哪种 transport 无关——对账只读 Orca CLI，非 Orca 终端也要能跑。
+    for row in open_dispatches(repo):
+        if not orca_dispatch_key(row["record"]):
+            continue
+        run_id = str(row["record"].get("run_id") or "")
+        if run_id:
+            by_run.setdefault(run_id, []).append(row)
+        else:
+            findings.append({"level": "warn", "task": row["task_id"], "dispatch": row["dispatch_id"],
+                             "problem": "派工记录没有 run_id，无法与 Orca 对账"})
+    if not by_run:
+        return findings  # hcom 派工或全部缺 run_id：没有可比对的权威事实
+    transport = transport or Orca(repo, cfg)
+    if not isinstance(transport, Orca):
+        return findings
+    runs = set(by_run)
+    for run_id, run_rows in by_run.items():
+        table = {}
+        for w in transport.workers(timeout=timeout, run=run_id):
+            key = w.get("dispatchId")
+            if key:
+                table[str(key)] = w
+        for row in run_rows:
+            key = orca_dispatch_key(row["record"])
+            worker = table.get(key) if key else None
+            base = {"task": row["task_id"], "dispatch": row["dispatch_id"]}
+            if worker is None:
+                findings.append(dict(base, level="warn",
+                                     problem=f"Orca run {run_id} 里找不到这个 dispatch（记录已清理或 run 变了）"))
+                continue
+            state = str(worker.get("state") or "")
+            live = str(worker.get("liveness") or "")
+            if state == "succeeded":
+                findings.append(dict(base, level="fail",
+                                     problem=f"Orca 报 succeeded，状态机仍停在 {row['task_status']}："
+                                             "DONE 没进状态机（被旁路消费、发送失败或协议头写错）",
+                                     hint="先 `check --peek` 看有没有遗留的 [FOREMAN:DONE]，再用 events 收；"
+                                          "确认丢了就 worker-read 取结论后手工推进 review"))
+            elif state == "failed":
+                findings.append(dict(base, level="fail",
+                                     problem=f"Orca 报 failed，状态机仍停在 {row['task_status']}",
+                                     hint="worker-read 看失败原因，再 task abandon 或 dispatch --retry-note 重派"))
+            elif state == "ready" and live != "live":
+                findings.append(dict(base, level="fail",
+                                     problem=f"worker 已退出（liveness={live}）但任务仍 {row['task_status']}："
+                                             "结束回合未上报",
+                                     hint="worker-read --source terminal 看它停在哪；补发 DONE 或 dispatch 重派"))
+    messages = transport.inbox(timeout=timeout)
+    if len(messages) >= 100:
+        findings.append({"level": "warn", "task": "-", "dispatch": "-",
+                         "problem": "inbox 已取满 100 条（更早的消息没扫到），核对结果可能不完整",
+                         "hint": "`orca orchestration inbox --json --full --limit 100` 看明细，必要时清理旧消息"})
+    for msg in messages:
+        if str(msg.get("run_id") or "") not in runs or not msg.get("read"):
+            continue
+        hit = HEADER_RE.search(str(msg.get("subject") or ""))
+        if not hit:
+            continue
+        kind = PROTOCOL_KIND.get(hit.group(1))
+        if not kind:
+            continue
+        task_id, dispatch_id = hit.group(2), hit.group(3)
+        evidence = repo.tasks_dir / safe_name(task_id) / "evidence" / f"{kind}-{safe_name(dispatch_id)}.md"
+        if not (repo.tasks_dir / safe_name(task_id)).is_dir() or evidence.exists():
+            continue
+        findings.append({"level": "fail", "task": task_id, "dispatch": dispatch_id,
+                         "problem": f"{hit.group(1)} 消息已被读走（read=1）却没有落进状态机（缺 {evidence.name}）",
+                         "hint": "别用裸 `orca orchestration check` 读消息（消费式）：排查用 check --peek，"
+                                 "收信一律走 foreman events"})
+    seen: set[tuple[str, str, str]] = set()
+    unique: list[dict] = []
+    for f in findings:
+        key = (str(f.get("task")), str(f.get("dispatch")), str(f.get("problem")))
+        if key not in seen:
+            seen.add(key)
+            unique.append(f)
+    return unique
 
 
 def make_transport(repo: Repo, cfg: dict) -> Transport:
@@ -1037,18 +1166,33 @@ class Orca(Transport):
             return [m for m in result if isinstance(m, dict)]
         return []
 
-    def workers(self, timeout: int = 120) -> list[dict]:
-        """当前 Run 的 dispatch 列表（worker-list）；失败返回空表（检测用途，不 fail）。"""
-        proc = self._run("orchestration", "worker-list", "--json", timeout=timeout)
+    def workers(self, timeout: int = 120, run: str | None = None) -> list[dict]:
+        """dispatch 列表（worker-list）；失败返回空表（检测用途，不 fail）。
+
+        不传 run 时 Orca 用"当前 Run"，而当前 Run 未必是任务所属的那个（gate-list 踩过这个坑），
+        对账一律显式传 run。
+        """
+        args = ["orchestration", "worker-list", "--json"]
+        if run:
+            args += ["--run", run]
+        proc = self._run(*args, timeout=timeout)
         if proc.returncode != 0:
             return []
-        try:
-            data = json.loads((proc.stdout or "").strip().splitlines()[-1])
-        except (ValueError, IndexError):
-            return []
+        data = cli_json(proc)
         res = data.get("result") or data
         rows = res.get("workers") if isinstance(res, dict) else None
         return [w for w in rows or [] if isinstance(w, dict)]
+
+    def inbox(self, timeout: int = 60, limit: int = 100) -> list[dict]:
+        """最近的编排消息（inbox 不支持 --run，只能取全局再本地按 run_id 过滤）。
+
+        必须带 `--full`：不带时 JSON 里没有 `run_id`，无法按 run 隔离（实测）。
+        """
+        proc = self._run("orchestration", "inbox", "--json", "--full",
+                         "--limit", str(limit), timeout=timeout)
+        if proc.returncode != 0:
+            return []
+        return self._extract_messages(cli_json(proc))
 
     def gate_create(self, orchestration_task: str, question: str, options: list[str]) -> str:
         args = ["orchestration", "gate-create", "--task", orchestration_task,
@@ -1093,6 +1237,15 @@ class Orca(Transport):
                 checks.append({"name": "orca-repo", "ok": registered,
                                "detail": "仓库未注册到 Orca" if not registered else "仓库已注册",
                                "fix": f"orca repo add --path {repo.root}" if not registered else ""})
+            if reachable:
+                rows = open_dispatches(repo)
+                odd = reconcile_findings(repo, cfg, timeout=30, transport=self) if rows else []
+                checks.append({"name": "orchestration-reconcile", "ok": not odd,
+                               "detail": (f"{len(odd)} 个在途 dispatch 与 Orca 状态不一致："
+                                          + odd[0]["task"] + "/" + str(odd[0]["dispatch"]) + " "
+                                          + odd[0]["problem"]) if odd else
+                                         f"{len(rows)} 个在途 dispatch 与 Orca 状态一致",
+                               "fix": "foreman.py reconcile 看明细（消息可能已被旁路消费）" if odd else ""})
         return checks
 
     def cleanup(self, repo: Repo, dispatch: dict) -> list[str]:
@@ -1151,6 +1304,8 @@ def worker_prompt(cfg: dict, task: dict, dispatch: dict, brief_path: Path) -> st
             f"--body '<已尝试方案+阻塞点>'，然后停止。\n"
             "Orca 的协议头放在 --subject，只在协议头里写 task/dispatch，正文放 --body。\n"
             "回复会以 Orca 唤醒到达；必要时先 orca orchestration check --json 读取。\n"
+            "不要用 orca orchestration ask / gate-create：那会在你自己的终端里阻塞，主管侧看不到，"
+            "请示一律走上一条的 [FOREMAN:ASK]。\n"
         )
     else:
         proto = (
@@ -1306,6 +1461,33 @@ def decisions_index_report(decisions_dir: Path) -> dict:
                 linked.add(resolved.name)
     return {"missing_index": False, "unreadable": False, "files": len(files), "entries": entries,
             "orphans": sorted(files - linked), "dead": sorted(set(dead))}
+
+
+def cmd_reconcile(args: argparse.Namespace) -> int:
+    """对账：把在途任务与 Orca 的权威状态比对，报出状态机漏掉的事实。"""
+    repo = Repo(Path(args.repo))
+    cfg = effective_config(repo)
+    findings = reconcile_findings(repo, cfg, timeout=args.timeout)
+    fails = [f for f in findings if f["level"] == "fail"]
+    rows = open_dispatches(repo)
+    if args.json:
+        print(json.dumps({"ok": not fails, "open_dispatches": len(rows),
+                          "findings": findings}, ensure_ascii=False, indent=2))
+    else:
+        orca_rows = [r for r in rows if orca_dispatch_key(r["record"])]
+        if not rows:
+            print("没有在途 dispatch，无需对账")
+        elif not orca_rows:
+            print(f"跳过：{len(rows)} 个在途 dispatch 都不是 Orca 派的（hcom 通道没有可比对的权威状态）")
+        elif not findings:
+            print(f"对账通过：{len(orca_rows)} 个 Orca 在途 dispatch 与通道状态一致")
+        for f in findings:
+            print(f"[{'FAIL' if f['level'] == 'fail' else 'WARN'}] {f['task']}/{f['dispatch']} {f['problem']}")
+            if f.get("hint"):
+                print(f"       → {f['hint']}")
+        if fails:
+            print(f"\n{len(fails)} 条分歧需要人工处置（消息可能已被旁路消费，用 events 收信、check --peek 排查）")
+    return EXIT_ERROR if fails else EXIT_OK
 
 
 def cmd_doctor(args: argparse.Namespace) -> int:
@@ -1991,7 +2173,12 @@ def cmd_reply(args: argparse.Namespace) -> int:
             if not g.get("resolved"):
                 g.update(resolved=True, decision=args.body, resolved_at=now_iso())
                 if cfg.get("transport") == "orca" and g.get("native_id"):
-                    transport.gate_resolve(g["native_id"], args.body)
+                    try:
+                        transport.gate_resolve(g["native_id"], args.body)
+                    except SystemExit:
+                        # 答复已经发出去了，此处失败不能反过来把任务留在 waiting_human
+                        eprint(f"警告：原生 gate {g['native_id']} 未关闭（{args.task_id} 状态照常推进），"
+                               f"必要时手工 `orca orchestration gate-resolve --gate {g['native_id']}`")
         task.setdefault("decisions", []).append({"level": "T3", "at": now_iso(), "note": args.body})
         task.setdefault("docs", {}).setdefault("decisions", [])
         for rel in dec_docs:
@@ -2471,6 +2658,12 @@ def build_parser() -> argparse.ArgumentParser:
                     help="scope 与在跑任务相交仍要派工（已知如何处理合并冲突才用）")
     add_json(sp)
     sp.set_defaults(func=cmd_dispatch)
+
+    sp = sub.add_parser("reconcile", help="对账：在途任务 vs Orca 的 dispatch 状态与消息落地")
+    sp.add_argument("--repo", default=".")
+    sp.add_argument("--timeout", type=int, default=30)
+    add_json(sp)
+    sp.set_defaults(func=cmd_reconcile)
 
     sp = sub.add_parser("events", help="阻塞等待 worker 的协议消息并落状态机")
     sp.add_argument("--repo", default=".")

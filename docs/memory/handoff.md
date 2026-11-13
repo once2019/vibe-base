@@ -16,10 +16,10 @@
 ## 当前状态（历史见 docs/progress/ 与 docs/decisions/）
 
 - 技能包 `skills/vibe-base` 1.1.0：骨架 16 文件（AGENTS.md + 14 docs + `scripts/foreman.py`），回归 137 项
-- 控制面已具备：doctor 14 项（含 `governance-budget`、`decisions-index`）、批次任务与逐项验收、
-  `depends-on` 前置门槛、scope 相交拦截、重派必写说明、`events` 空等拦截
+- 控制面已具备：doctor 16 项（含 `decisions-index`、`orchestration-reconcile`）、批次任务与逐项验收、
+  `depends-on` 前置门槛、scope 相交拦截、重派必写说明、`events` 空等拦截、`reconcile` 对账
 - storyboard-maker 控制面已同步到最新；AGENTS.md 保持项目版，历史文档零丢失
-- 未完成清单：`reconcile`（任务状态 vs Orca dispatch 状态对账）、旁路消费护栏、`ask` 与 Orca gate 桥接——三项待决策
+- 未完成清单：空
   （zip 重打包与技能目录重装已按人类要求删除）
 
 ## 关键决策引用

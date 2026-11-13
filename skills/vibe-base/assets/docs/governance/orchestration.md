@@ -177,6 +177,18 @@ python3 scripts/foreman.py task new --repo . --title "EP1 三处修" \
 
 结论逐条标严重度：`阻断`（不许合并）/ `必须改` / `建议` / `备查`。不带严重度的评论视为审查未完成，worker 无法判断哪条必改；指出结构问题时一并给改法（换掉条件链、抽 helper、复用既有权威函数），只说"这里复杂"等于没审。
 
+## 对账（任务不动了先跑它）
+
+纯消息驱动有盲区：消息被裸 `check` 吃走、worker 崩溃、DONE 发送失败，任务都会停在
+`running` 而没人知道。`foreman.py reconcile` 拿通道给的权威事实比对三条——
+
+- dispatch 状态：通道说 `succeeded`/`failed`，状态机却还停在 `running`；
+- liveness：`ready` 但 worker 已退出 = 结束回合未上报；
+- 消息落地：inbox 里 `read=1` 的 `[FOREMAN:*]` 却没有对应 evidence = 被旁路消费。
+
+`doctor` 的 `orchestration-reconcile` 每次体检都跑一次（通道不可达时跳过，不判 FAIL）。
+发现分歧先看它给的 next step，不要靠再开一个 `events` 窗口碰运气。
+
 ## 失败语义
 
 - 第 1/2 次失败 = 任务可修：修因后重新 `dispatch`（复用同一棵 worktree，主管看到的是累计 diff）。

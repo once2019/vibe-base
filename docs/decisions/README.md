@@ -17,3 +17,4 @@
 - 2026-11-13｜技能库｜[派发策略：批次任务 + 三道机械门槛](2026-11-13-batch-task-and-dispatch-gates.md)｜已生效｜有依赖的子项整批派给一个 worker（逐项验收逐项留证），另加 depends-on 前置门槛、scope 相交拦截与重派必写说明
 - 2026-11-13｜技能库｜[events 不再允许连环开窗口：空等计数 + 通道待收探测](2026-11-13-events-no-polling-guard.md)｜已生效｜一次调用算一轮，连续两轮空等后第 3 次直接拒绝并指向 handoff；有消息在等时放行；闭环拆成「派工回合 / 被唤醒回合」
 - 2026-11-13｜技能库｜[escalation 落进状态机：用 Orca 的 taskId/dispatchId 认领任务](2026-11-13-escalation-into-state-machine.md)｜已生效｜通道给的"worker 结束回合未上报"不再只记日志；已 waiting_answer 的任务不降级；prompt 补 --dispatch-id
+- 2026-11-13｜技能库｜[对账：拿通道的权威事实补消息驱动的盲区](2026-11-13-reconcile-against-orca-state.md)｜已生效｜新增 reconcile 与 doctor 的 orchestration-reconcile：dispatch 状态 / liveness / 消息落地三条账；inbox 必须 --full 才有 run_id

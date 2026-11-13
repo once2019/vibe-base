@@ -1075,6 +1075,146 @@ class TestOrcaSkippedSurfaced(TempGitRepoMixin):
         self.assertEqual(out["escalation"]["stop_reason"], "finished")
 
 
+class TestReconcile(TempGitRepoMixin):
+    """对账：在途任务 vs Orca 的 dispatch 状态与消息落地（纯消息驱动的盲区）。"""
+
+    def _setup(self, worker: dict | None, messages: list[dict] | None = None,
+               transport: str = "orca") -> foreman.Orca:
+        cfg = foreman.effective_config(self.repo)
+        cfg = dict(cfg, transport=transport)
+        foreman.write_json(self.repo.task_dir("T-001") / "task.json", {
+            "id": "T-001", "title": "t", "slug": "t", "status": "running", "attempts": 1,
+            "scope": ["src/"], "acceptance": "true", "docs": {"progress": None, "decisions": []},
+            "dispatches": [{"id": "D-001", "worker_handle": "dispatch:ctx_1", "run_id": "run_1",
+                            "orchestration_task": "task_1", "worktree": "/tmp/x"}],
+            "asks": [], "gates": [], "decisions": [], "log": [], "created_at": "x", "updated_at": "x",
+        })
+        fake = self.root / "fake-orca-reconcile"
+        payload = {"workers": [worker] if worker else []}
+        inbox = {"messages": messages or []}
+        fake.write_text("#!/bin/sh\ncase \"$2\" in\n"
+                        f"  worker-list) echo '{json.dumps({'ok': True, 'result': payload})}' ;;\n"
+                        f"  inbox) echo '{json.dumps({'ok': True, 'result': inbox})}' ;;\n"
+                        "  *) echo '{\"ok\":true,\"result\":{}}' ;;\nesac\n")
+        make_executable(fake)
+        o = foreman.Orca(self.repo, cfg)
+        o.bin = str(fake)
+        return o
+
+    def _findings(self, o: foreman.Orca, transport: str = "orca") -> list[dict]:
+        cfg = dict(foreman.effective_config(self.repo), transport=transport)
+        return foreman.reconcile_findings(self.repo, cfg, transport=o)
+
+    def test_consistency_has_no_findings(self) -> None:
+        o = self._setup({"dispatchId": "ctx_1", "state": "ready", "liveness": "live"})
+        self.assertEqual(self._findings(o), [])
+
+    def test_orca_succeeded_but_task_running(self) -> None:
+        """Orca 说完成了，状态机没收到 DONE：这是消息被旁路消费的典型症状。"""
+        o = self._setup({"dispatchId": "ctx_1", "state": "succeeded", "liveness": "exited"})
+        findings = self._findings(o)
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0]["level"], "fail")
+        self.assertIn("DONE 没进状态机", findings[0]["problem"])
+
+    def test_worker_exited_without_reporting(self) -> None:
+        o = self._setup({"dispatchId": "ctx_1", "state": "ready", "liveness": "exited"})
+        findings = self._findings(o)
+        self.assertEqual([f["level"] for f in findings], ["fail"])
+        self.assertIn("结束回合未上报", findings[0]["problem"])
+
+    def test_orca_failed_but_task_running(self) -> None:
+        o = self._setup({"dispatchId": "ctx_1", "state": "failed", "liveness": "exited"})
+        findings = self._findings(o)
+        self.assertIn("Orca 报 failed", findings[0]["problem"])
+
+    def test_read_message_without_evidence(self) -> None:
+        """消息被读走（read=1）却没有 evidence：说明是被裸 check 吃掉的。"""
+        msg = {"id": "m1", "run_id": "run_1", "read": 1, "type": "status",
+               "subject": "[FOREMAN:DONE] task=T-001 dispatch=D-001"}
+        o = self._setup({"dispatchId": "ctx_1", "state": "ready", "liveness": "live"}, [msg])
+        findings = self._findings(o)
+        self.assertEqual(len(findings), 1)
+        self.assertIn("没有落进状态机", findings[0]["problem"])
+        self.assertIn("--peek", findings[0]["hint"])
+
+    def test_landed_message_is_exempt_but_siblings_still_checked(self) -> None:
+        """已落地的消息不算问题，但同批里没落地的照报——豁免不能退化成整批跳过。"""
+        landed = {"id": "m1", "run_id": "run_1", "read": 1, "type": "status",
+                  "subject": "[FOREMAN:ASK] task=T-001 dispatch=D-001"}
+        lost = {"id": "m2", "run_id": "run_1", "read": 1, "type": "status",
+                "subject": "[FOREMAN:ESCALATE] task=T-001 dispatch=D-002"}
+        o = self._setup({"dispatchId": "ctx_1", "state": "ready", "liveness": "live"}, [landed, lost])
+        evidence = self.repo.task_dir("T-001") / "evidence" / "ask-D-001.md"
+        evidence.parent.mkdir(parents=True, exist_ok=True)
+        evidence.write_text("问过了", encoding="utf-8")
+        findings = self._findings(o)
+        self.assertEqual([f["dispatch"] for f in findings], ["D-002"])
+        self.assertIn("ESCALATE", findings[0]["problem"])
+
+    def test_other_run_messages_are_ignored(self) -> None:
+        msg = {"id": "m1", "run_id": "run_other", "read": 1,
+               "subject": "[FOREMAN:DONE] task=T-001 dispatch=D-001"}
+        o = self._setup({"dispatchId": "ctx_1", "state": "ready", "liveness": "live"}, [msg])
+        self.assertEqual(self._findings(o), [])
+
+    def test_unread_message_is_not_a_finding(self) -> None:
+        msg = {"id": "m1", "run_id": "run_1", "read": 0,
+               "subject": "[FOREMAN:DONE] task=T-001 dispatch=D-001"}
+        o = self._setup({"dispatchId": "ctx_1", "state": "ready", "liveness": "live"}, [msg])
+        self.assertEqual(self._findings(o), [])
+
+    def test_pretty_printed_cli_json_is_parsed(self) -> None:
+        """Orca 的 `inbox --full` 是多行 pretty JSON，只取最后一行会解析失败（实机踩到）。"""
+        fake = self.root / "fake-orca-pretty"
+        workers = {"ok": True, "result": {"workers": [{"dispatchId": "ctx_1", "state": "succeeded",
+                                                      "liveness": "exited"}]}}
+        fake.write_text("#!/bin/sh\ncase \"$2\" in\n"
+                        f"  worker-list) printf '%s\\n' '{json.dumps(workers, indent=2)}' ;;\n"
+                        "  *) echo '{\"ok\":true,\"result\":{}}' ;;\nesac\n")
+        make_executable(fake)
+        o = foreman.Orca(self.repo, foreman.effective_config(self.repo))
+        o.bin = str(fake)
+        self.assertEqual(len(o.workers(timeout=20, run="run_1")), 1)
+        self.assertEqual(foreman.cli_json(o._run("orchestration", "worker-list", timeout=20))["ok"], True)
+
+    def test_unknown_orca_dispatch_is_warn(self) -> None:
+        o = self._setup({"dispatchId": "ctx_other", "state": "ready", "liveness": "live"})
+        findings = self._findings(o)
+        self.assertEqual([f["level"] for f in findings], ["warn"])
+
+    def test_hcom_dispatch_is_skipped(self) -> None:
+        """hcom 派工记录是 @实例名，没有 Orca 权威状态可比——静默跳过，不报缺失。"""
+        o = self._setup(None, transport="hcom")
+        task = foreman.read_json(self.repo.task_dir("T-001") / "task.json")
+        task["dispatches"] = [{"id": "D-001", "worker_handle": "@worker", "worktree": "/tmp/x"}]
+        foreman.write_json(self.repo.task_dir("T-001") / "task.json", task)
+        self.assertEqual(self._findings(o, transport="hcom"), [])
+
+    def test_orca_dispatch_without_run_id_warns(self) -> None:
+        o = self._setup(None)
+        task = foreman.read_json(self.repo.task_dir("T-001") / "task.json")
+        task["dispatches"][0].pop("run_id")
+        foreman.write_json(self.repo.task_dir("T-001") / "task.json", task)
+        findings = self._findings(o)
+        self.assertEqual([f["level"] for f in findings], ["warn"])
+        self.assertIn("run_id", findings[0]["problem"])
+
+    def test_cli_exit_code_and_json(self) -> None:
+        o = self._setup({"dispatchId": "ctx_1", "state": "succeeded", "liveness": "exited"})
+        os.environ["ORCA_CLI_COMMAND"] = o.bin
+        self.addCleanup(os.environ.pop, "ORCA_CLI_COMMAND", None)
+        foreman.write_json(self.repo.config_path, dict(self.repo.config(), transport="orca"))
+        self.assertEqual(foreman.main(["reconcile", "--repo", str(self.root)]), 1)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = foreman.main(["reconcile", "--repo", str(self.root), "--json"])
+        self.assertEqual(code, 1)
+        data = json.loads(out.getvalue())
+        self.assertFalse(data["ok"])
+        self.assertEqual(data["findings"][0]["task"], "T-001")
+
+
 class TestEscalation(TempGitRepoMixin):
     """escalation 落状态机：Orca 报"worker 结束回合未上报"时任务不能永远停在 running。"""
 
