@@ -560,6 +560,55 @@ class TestEventFlow(TempGitRepoMixin):
                           "--scope", "src/", "--item", "a", "--item", "b", "--accept", "true"])
         self.assertNotEqual(cm.exception.code, 0)
 
+    def _set_unread(self, unread: int) -> None:
+        name = self.repo.config()["foreman_name"]
+        os.environ["FAKE_HCOM_LIST"] = json.dumps([{"name": name, "unread_count": unread}])
+
+    def test_events_refuses_third_consecutive_empty_wait(self) -> None:
+        """连续两轮空等后不再开窗口：规则从"建议"变成机械拦截。
+
+        实测来源：主管把 events 当轮询连环开了三次（420s / 540s / 540s），
+        文档只写"最多两轮"却没定义"轮"，也没有任何拦截。
+        """
+        os.environ.pop("FAKE_HCOM_EVENT", None)
+        os.environ.pop("FAKE_ORCA_EVENT", None)
+        self._set_unread(0)
+        for i in (1, 2):
+            self.assertEqual(self.run_events(), 1)
+            self.assertEqual(foreman.read_wait_streak(self.repo), i)
+
+        with self.assertRaises(SystemExit) as cm:
+            foreman.main(["events", "--repo", str(self.root), "--timeout", "5"])
+        self.assertNotEqual(cm.exception.code, 0)
+        self.assertEqual(foreman.read_wait_streak(self.repo), 2, "被拒的那次不该再计数")
+
+    def test_pending_message_is_consumed_even_at_the_cap(self) -> None:
+        """已经到上限时，若确有消息在等就必须放行——否则主管被永久锁在门外。"""
+        os.environ.pop("FAKE_ORCA_EVENT", None)
+        self._set_unread(0)
+        os.environ.pop("FAKE_HCOM_EVENT", None)
+        for _ in (1, 2):
+            self.assertEqual(self.run_events(), 1)
+        self._set_unread(1)
+        self.set_event("[FOREMAN:ASK] task=T-001 dispatch=D-001\n用哪个库？选项 A/B")
+        self.assertEqual(self.run_events(), 0, "有消息时必须能消费")
+        self.assertEqual(foreman.read_wait_streak(self.repo), 0, "消费后清零")
+        self._set_unread(0)
+        os.environ.pop("FAKE_HCOM_EVENT", None)
+        self.assertEqual(self.run_events(), 1, "清零后允许重新等待")
+
+    def test_empty_wait_output_tells_you_to_end_the_turn(self) -> None:
+        """超时输出必须给出下一步动作，而不只是说"超时"。"""
+        os.environ.pop("FAKE_HCOM_EVENT", None)
+        os.environ.pop("FAKE_ORCA_EVENT", None)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            foreman.main(["events", "--repo", str(self.root), "--timeout", "5"])
+        out = buf.getvalue()
+        self.assertIn("第 1/" + str(foreman.MAX_EMPTY_WAITS) + " 轮空等", out)
+        self.assertIn("结束回合", out)
+        self.assertIn("handoff.md", out)
+
     def test_merge_refuses_when_not_merge_ready(self) -> None:
         with self.assertRaises(SystemExit):
             foreman.main(["merge", "T-001", "--repo", str(self.root)])

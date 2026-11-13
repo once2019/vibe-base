@@ -544,6 +544,10 @@ class Transport:
         """阻塞等一条 [FOREMAN:*] 消息，归一化为 {id, instance, data:{text,from}}；超时返回 {'timed_out': True}。"""
         raise NotImplementedError
 
+    def has_pending(self) -> bool | None:
+        """是否有待消费消息（无损探测）：True/False；None = 该通道不支持探测。"""
+        return None
+
     # Orca 专有：调用点均已按 cfg["transport"] == "orca" 收口，hcom 实现不提供
     def run_id(self, timeout: int = 60) -> str | None:
         raise NotImplementedError
@@ -720,6 +724,25 @@ class Hcom(Transport):
             except ValueError:
                 continue
         return {"timed_out": True}
+
+    def has_pending(self) -> bool | None:
+        """hcom list --json 里本实例的 unread_count；查不到本实例就返回 None（不拦）。"""
+        proc = self._run("list", "--json", timeout=60)
+        if proc.returncode != 0:
+            return None
+        try:
+            items = json.loads((proc.stdout or "").strip() or "[]")
+        except ValueError:
+            return None
+        if not isinstance(items, list):
+            return None
+        for it in items:
+            if isinstance(it, dict) and it.get("name") == self.foreman_name:
+                try:
+                    return int(it.get("unread_count") or 0) > 0
+                except (TypeError, ValueError):
+                    return None
+        return None
 
     def doctor_checks(self, repo: Repo, cfg: dict) -> list[dict]:
         checks: list[dict] = []
@@ -909,6 +932,17 @@ class Orca(Transport):
         if not dispatch_id or not wt_path:
             fail(f"worker-start 回执缺少 dispatchId/worktree 信息：{blob[:400]}")
         return dispatch_id, wt_path, wt_sel, branch
+
+    def has_pending(self) -> bool | None:
+        """check --peek：只读不标记，不影响随后的 check --wait。"""
+        proc = self._run("orchestration", "check", "--peek", "--json", timeout=60)
+        if proc.returncode != 0:
+            return None
+        try:
+            data = json.loads((proc.stdout or "").strip().splitlines()[-1])
+        except (ValueError, IndexError):
+            return None
+        return bool(self._extract_messages(data))
 
     def wait_message(self, timeout: int) -> dict:
         """check --wait：JSON 在 stdout，keepalive 在 stderr（不干扰解析）。
@@ -1756,6 +1790,27 @@ def apply_protocol_event(repo: Repo, cfg: dict, event: dict) -> dict:
     return result
 
 
+MAX_EMPTY_WAITS = 2  # 连续空等上限：超过就别再开窗口，结束回合等唤醒
+
+
+def wait_streak_path(repo: Repo) -> Path:
+    return repo.logs_dir / "events-waits.json"
+
+
+def read_wait_streak(repo: Repo) -> int:
+    p = wait_streak_path(repo)
+    if not p.exists():
+        return 0
+    try:
+        return max(0, int(read_json(p).get("empty_waits", 0)))
+    except (ValueError, TypeError):
+        return 0
+
+
+def write_wait_streak(repo: Repo, n: int) -> None:
+    write_json(wait_streak_path(repo), {"empty_waits": n, "at": now_iso()})
+
+
 def cmd_events(args: argparse.Namespace) -> int:
     repo = Repo(Path(args.repo))
     cfg = effective_config(repo)
@@ -1763,6 +1818,18 @@ def cmd_events(args: argparse.Namespace) -> int:
     transport = make_transport(repo, cfg)
     if not transport.available():
         fail(f"编排通道 {cfg.get('transport', 'hcom')} 不可用")
+    streak = read_wait_streak(repo)
+    if streak >= MAX_EMPTY_WAITS:
+        pending = transport.has_pending()
+        if pending is None:
+            print(f"注意：已连续 {streak} 轮空等（本通道无法无损探测待收消息，不拦截）。"
+                  "该结束回合了：在 handoff 运行态写一行「在等什么」，等唤醒后再跑 events。")
+        elif not pending:
+            fail(f"已连续 {streak} 轮空等（上限 {MAX_EMPTY_WAITS}）：不要再开等待窗口。\n"
+                 "结束这个回合，在 docs/memory/handoff.md 运行态写一行"
+                 "「<任务> 在等 <dispatch> 的 <消息类型>」，等通道唤醒后再跑 events 消费。\n"
+                 "主管空闲时消息自己会叫醒你，主动开窗口只是把自己锁住；"
+                 "worker 迟迟不来消息就用 worker-read / send / task abandon 处理，别靠继续等。")
     event = transport.wait_message(args.timeout)
     if event.get("timed_out"):
         skipped = event.get("skipped") or []
@@ -1774,8 +1841,14 @@ def cmd_events(args: argparse.Namespace) -> int:
             hint = (f"\n本批 {len(skipped)} 条非协议消息（{kinds}）已记入 logs/transport-skipped.log"
                     + ("；escalation 说明 worker 结束回合未上报：用 worker-read 看它停在哪，"
                        "再 send --to dispatch:<orcaId> 给指引或 task abandon 后重派" if warn else ""))
-        emit(args, {"timed_out": True, "skipped": skipped},
-             "等待超时，无匹配协议消息" + hint)
+        streak += 1
+        write_wait_streak(repo, streak)
+        left = MAX_EMPTY_WAITS - streak
+        tail = (f"\n这是连续第 {streak}/{MAX_EMPTY_WAITS} 轮空等：结束回合，"
+                "在 docs/memory/handoff.md 运行态写一行「在等什么」，等通道唤醒后再跑 events。"
+                + ("" if left <= 0 else f"（还要继续等的话，还剩 {left} 轮余量，别连开窗口）"))
+        emit(args, {"timed_out": True, "skipped": skipped, "empty_waits": streak},
+             "等待超时，无匹配协议消息" + hint + tail)
         return EXIT_ERROR
     if event.get("rejected"):
         r = event["rejected"]
@@ -1783,6 +1856,7 @@ def cmd_events(args: argparse.Namespace) -> int:
              "多半是 worker_done 缺 --task-id，任务仍停在原状态。"
              "给 worker 发 ANSWER 让它补 --task-id 重发，或 task abandon 后重派；"
              "排查细节见 docs/governance/orchestration-orca.md", EXIT_ERROR)
+    write_wait_streak(repo, 0)  # 消费到消息即清零
     extra = event.get("batch_extra") or []
     result = apply_protocol_event(repo, cfg, event)
     if extra:
@@ -2329,7 +2403,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("events", help="阻塞等待 worker 的协议消息并落状态机")
     sp.add_argument("--repo", default=".")
     sp.add_argument("--timeout", type=int, default=300,
-                    help="单轮等待上限秒数（同一 dispatch 最多两轮，之后结束回合留状态行）")
+                    help="单轮等待上限秒数；一次调用算一轮，连续两轮空等后不再开窗口")
     add_json(sp)
     sp.set_defaults(func=cmd_events)
 

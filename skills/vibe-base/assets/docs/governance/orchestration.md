@@ -17,21 +17,28 @@
 
 人类给目标 → 主管拆任务/写派工单 → worker 在独立 worktree 实现并自审 → 主管审 diff + 复跑验收 → 合并删树 → 竣工单（即 `docs/progress/` 进度文件）。
 
+一次派工跨两个回合。`events` 是**第二个回合的入口**，不是派工之后的下一步：
+
 ```bash
 F=scripts/foreman.py
+# 回合一：派工。做完就结束回合，不 sleep、不开等待窗口
 python3 $F doctor --repo .          # 体检：git / 编排通道 / agent / 会话接入 / 仓库干净 / docs 落点
-python3 $F init --repo .            # 幂等建 .vibe/ 并写入 .git/info/exclude
 python3 $F task new --repo . --title "实现 X" --scope "src/" --accept "npm test"
-python3 $F dispatch T-001           # 建 worktree/分支并拉起 worker，然后结束回合
-python3 $F events --timeout 300     # 阻塞等一条协议消息（结束回合，等通道唤醒）
-python3 $F reply T-001 --body "裁决与理由" --decision-doc docs/decisions/<日期>-<主题>.md
-python3 $F ask T-001 --question "..." --options "允许,不允许"   # Ask-first 阻塞门（任务挂起）
-python3 $F review T-001             # 审 diff + 跑验收 + 存证据 → merge_ready / failed
+python3 $F dispatch T-001           # 建 worktree/分支并拉起 worker → 结束回合
+
+# 回合二：被通道唤醒后（终端出现 "You have 1 orchestration message"）才跑
+python3 $F events --timeout 300     # 消费这一条：落 evidence、推进状态机
+python3 $F review T-001             # DONE → 审 diff + 跑验收 + 存证据
 python3 $F merge T-001              # --no-ff 合并 + 复跑验收 + 删树 + 归档
 python3 $F report T-001             # 竣工单 → docs/progress/（入库）
 ```
 
-每轮只处理一步，然后结束回合等通道唤醒；不轮询、不 sleep。约束的是回合粒度，不是并行度：多个任务可以同时在跑，每个回合仍只处理一条事件。失败一律非零退出 + stderr 说明（fail-visible），不吞错重试。
+中途的 `reply`（答复 ASK）、`ask`（Ask-first 阻塞门）都插在回合二里。
+
+- **`events` 是消费唤醒的手段，不是制造等待的手段**。主管空闲时消息自己会叫醒它，主动开窗口只是把自己锁住。
+- 一次 `events` 调用算一轮。**连续两轮空等后 `events` 直接拒绝**（`MAX_EMPTY_WAITS`），要你结束回合；空等超时的输出会提示在 `handoff.md` 运行态写一行「在等什么」。
+- 不要用 `orca orchestration check` 代替 `events`：`check` 是消费式的，会把消息拿走，`events` 随后只等到超时。
+- 每轮只处理一条事件，处理完再决定下一步；约束的是回合粒度，不是并行度——多个任务可以同时在跑。失败一律非零退出 + stderr 说明（fail-visible），不吞错重试。
 
 ## 派工单
 

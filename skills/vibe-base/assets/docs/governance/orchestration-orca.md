@@ -33,7 +33,8 @@
 | 验收产物挡合并 | `merge` 复跑验收在主仓库留下 `__pycache__/`、`.pytest_cache/`，下一个任务的 `merge` 报「工作区不干净」 | `init` 现在把 `.vibe` + 常见构建产物（`__pycache__/`、`*.pyc`、`.pytest_cache/`、`node_modules/`、`target/`、`dist/`、`build/` 等）写进 `.git/info/exclude`（本地生效不入库）；老仓库重跑一次 `init` 即可 | ✅E2E 亲历（第二次 merge 被挡后修复） |
 | 日志无轮转 | 长期运行 `logs/*.log` 无限增长 | foreman 超过 1MB 自动轮转一份 `.1` | ✅`append_log` 单测 |
 | 脚本消费主管邮件 | Orca 明确要求"只观察的脚本用 `--peek --wait`，不得 `--ack`"；用消费式 `check` 会把主管 session 的邮件拿走 | foreman 是消费式（它把内容落 evidence 与状态，信息不丢）。因此**foreman 模式下不要同时让 agent hooks 收信**：被唤醒后应运行 `foreman.py events` 而不是自己 `check`（否则会拿到空批） | 📖help 原文 + ✅E2E 亲历（唤醒后自己 check 收到的是空批） |
-| 长阻塞 `--wait` | 主管被锁十几分钟；唤醒注入可能被正在跑的命令吞掉 | 派完就结束回合。foreman `events` 默认 300s；同一 dispatch 最多两轮，之后结束回合留一行「在等什么」。**`--timeout-ms` 没有技术硬上限**（旧技能写的 120000 是 house rule，不是限制） | ✅实测（`--timeout-ms 900000` 未被拒） |
+| 长阻塞 `--wait` | 主管被锁十几分钟；唤醒注入可能被正在跑的命令吞掉 | 派完就结束回合。**一次 `events` 调用 = 一轮**；连续两轮空等后 `events` 自己拒绝（`MAX_EMPTY_WAITS=2`），要你结束回合。**`--timeout-ms` 没有技术硬上限**（旧技能写的 120000 是 house rule，不是限制） | ✅实测（`--timeout-ms 900000` 未被拒；上限拦截有单测） |
+| 把 `events` 当轮询 | 连着开三个窗口（420s / 540s / 540s）空转；旧条文只写「同一 dispatch 最多两轮」，没说「轮」是调用次数还是派工次数 | 规则改成按调用计数并由代码拦：连续两轮空等后第 3 次调用直接 fail，输出指明「结束回合、在 handoff 写一行在等什么」。有消息在等时仍放行（`has_pending` 探测），不会把主管锁在门外 | ✅实测（主管三次连开窗口的真实事故） |
 | 手工 `check --json` 排查 | `check` 是消费式的：主管自己跑一次，就把 worker 的 DONE 吃掉了，`events` 随后只会等到超时（真 E2E 亲历） | 主管排查用 `check --peek --json`（只读不标记）或 `--unread`；收信一律走 `foreman.py events`，不要自己 `check` | ✅实测（吃掉一封 DONE，只能让 worker 重发） |
 | `worker_done` 缺 `--task-id` | Orca 拒收，subject 变成 `Rejected worker_done: [FOREMAN:DONE] ...`，协议头正则匹配不到 | 派工 prompt 要求先 `worker-list` 取 taskId 再发；`wait_message` 现在把 `Rejected` 前缀识别成 `rejected` 信号，`events` 直接报错而不是静默超时 | ✅实测（首轮 E2E 卡在这里） |
 | `worker-start --worktree current` | worker 一 `git checkout -b` 就把主管 HEAD 切走；主管的脏文件被 `add` 进提交 | 改动任务一律独立树。foreman 用 `new-top-level --repo id:<repoId>`（不依赖主管在 Orca 活跃 worktree）；`new-child` 是原生替代（多一层父子血缘） | 📖help 列出 `current|selector|new-child|new-top-level` + ⚠️切 HEAD 为旧技能记述 |
@@ -64,6 +65,6 @@
 | 旧说法 | 实况 |
 | --- | --- |
 | "同一任务 3 次失败会被 `circuit_broken`" | 本版 CLI 无 `circuit_broken`。3 次上限是 **foreman 自己的规则**（`max_attempts`），Orca 原生不强制 |
-| "`check --wait --timeout-ms` 硬上限 120000" | 无技术上限；120s 是旧技能的 house rule。foreman 取 300s + 最多两轮 |
+| "`check --wait --timeout-ms` 硬上限 120000" | 无技术上限；120s 是旧技能的 house rule。foreman 默认 300s，连续两轮空等即拒绝再开窗口 |
 | "pi 报 `provider_unsupported`" | 本版 CLI 无此错误码；`--source auto` 会自动回退终端输出 |
 | "`--worktree new-child` 是唯一正确选择" | `new-top-level` 同样安全（都避开 `current`）；差别只是父子血缘 |
