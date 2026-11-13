@@ -35,6 +35,8 @@
 
 ## 未完成工作清单
 
+- [x] `doctor` 新增 `decisions-index`（2026-11-13）：孤儿/死链即 FAIL，测试 117→121
+
 - [x] **真实通道 E2E 已跑通**（Orca，`/tmp/e2e-skill`，2026-11-13）：两轮全链路
       dispatch → worker(pi) → DONE → review → merge → report；暴露并修掉 4 个问题（见 progress）
 - [x] **storyboard-maker 已升级**（`6a36a74`，2026-11-13）：控制面同步到 `24d2756`（E2E 修复版），

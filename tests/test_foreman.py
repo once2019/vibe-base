@@ -1005,6 +1005,66 @@ class TestLogRotation(unittest.TestCase):
         self.assertEqual(path.read_text(), "tail\n")
 
 
+class TestDecisionsIndex(TempGitRepoMixin):
+    """决策索引双向核对：孤儿（未登记）与死链（指向不存在文件）都要报出来。"""
+
+    def _index(self, *entries: str) -> None:
+        d = self.root / "docs" / "decisions"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "README.md").write_text(
+            "# 决策索引\n\n- YYYY-MM-DD｜<模块>｜[<决策标题>](YYYY-MM-DD-决策文件名.md)｜<状态>\n\n"
+            + "\n".join(entries) + "\n", encoding="utf-8")
+
+    def _decision(self, name: str) -> None:
+        d = self.root / "docs" / "decisions"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / name).write_text("# 决策\n", encoding="utf-8")
+
+    def test_consistent_index_reports_ok(self) -> None:
+        self._decision("2026-01-01-a.md")
+        self._decision("2026-01-02-b.md")
+        self._index("- 2026-01-01｜x｜[a](2026-01-01-a.md)｜已生效",
+                    "- 2026-01-02｜x｜[b](2026-01-02-b.md)｜已生效",
+                    # 追记行重复登记同一文件属合法用法
+                    "- 2026-01-02｜x｜[b 追记](2026-01-02-b.md)｜追记")
+        rep = foreman.decisions_index_report(self.root / "docs" / "decisions")
+        self.assertEqual(rep["orphans"], [])
+        self.assertEqual(rep["dead"], [])
+        self.assertEqual(rep["entries"], 3, "头部格式示例不应算条目")
+        self.assertEqual(rep["files"], 2)
+
+    def test_orphan_and_dead_link_are_both_reported(self) -> None:
+        self._decision("2026-01-01-a.md")
+        self._decision("2026-01-02-孤儿.md")
+        self._index("- 2026-01-01｜x｜[a](2026-01-01-a.md)｜已生效",
+                    "- 2026-01-03｜x｜[已删](2026-01-03-deleted.md)｜已生效")
+        rep = foreman.decisions_index_report(self.root / "docs" / "decisions")
+        self.assertEqual(rep["orphans"], ["2026-01-02-孤儿.md"])
+        self.assertEqual(rep["dead"], ["2026-01-03-deleted.md"])
+
+    def test_missing_index_is_reported(self) -> None:
+        self._decision("2026-01-01-a.md")
+        rep = foreman.decisions_index_report(self.root / "docs" / "decisions")
+        self.assertTrue(rep["missing_index"])
+
+    def test_doctor_fails_on_orphan_decision(self) -> None:
+        self._decision("2026-01-01-a.md")
+        self._decision("2026-01-02-孤儿.md")
+        self._index("- 2026-01-01｜x｜[a](2026-01-01-a.md)｜已生效")
+        (self.root / "docs" / "progress").mkdir(parents=True, exist_ok=True)
+        (self.root / "AGENTS.md").write_text("# x\n", encoding="utf-8")
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = foreman.main(["doctor", "--repo", str(self.root), "--json"])
+        out = buf.getvalue()
+        data, _ = json.JSONDecoder().raw_decode(out[out.index("{"):])
+        self.assertEqual(rc, 1)
+        entry = [c for c in data["checks"] if c["name"] == "decisions-index"]
+        self.assertEqual(len(entry), 1, "doctor 里必须有这条检查")
+        self.assertFalse(entry[0]["ok"])
+        self.assertIn("2026-01-02-孤儿.md", entry[0]["detail"])
+
+
 class TestDoctorOrcaRepo(TempGitRepoMixin):
     """doctor 的注册检查必须复用同一次 repo list 结果（否则会白跑一次 120s 预算的命令）。"""
 

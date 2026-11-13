@@ -1146,6 +1146,34 @@ TYPE 取 ASK / DONE / ESCALATE。请示用 ASK（附问题、选项、推荐项�
 # ---------------------------------------------------------------- 命令：doctor
 
 
+DECISION_ENTRY_LINE = re.compile(r"^- \d{4}-\d{2}-\d{2}")
+DECISION_LINK = re.compile(r"\]\(([^)]+\.md)\)")
+
+
+def decisions_index_report(decisions_dir: Path) -> dict:
+    """决策索引与实际文件的双向核对：孤儿（文件未登记）与死链（索引指向不存在）。
+
+    只认以 `- YYYY-MM-DD` 开头的行：索引头部的格式示例（`- YYYY-MM-DD｜<模块>｜…`）
+    与说明文字不算条目。同一文件被多条索引行引用是合法的（追记行各带一句改动）。
+    """
+    files = {p.name for p in decisions_dir.glob("*.md")} - {"README.md", "_template.md"}
+    readme = decisions_dir / "README.md"
+    if not readme.exists():
+        return {"missing_index": True, "files": len(files), "entries": 0, "orphans": [], "dead": []}
+    entries, dead, linked = 0, [], set()
+    for line in readme.read_text(encoding="utf-8").splitlines():
+        if not DECISION_ENTRY_LINE.match(line):
+            continue
+        for target in DECISION_LINK.findall(line):
+            entries += 1
+            name = Path(target).name
+            linked.add(name)
+            if name not in files:
+                dead.append(name)
+    return {"missing_index": False, "files": len(files), "entries": entries,
+            "orphans": sorted(files - linked), "dead": sorted(set(dead))}
+
+
 def cmd_doctor(args: argparse.Namespace) -> int:
     repo = Repo(Path(args.repo))
     checks: list[dict] = []
@@ -1207,9 +1235,29 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             check("governance-budget", False, detail + "：超预算先修剪，别压缩措辞",
                   "删「读代码即可获知」的条目，或把细节挪进 docs/governance/")
         else:
-            decisions = len(list((repo.root / docs_paths(cfg)["decisions"]).glob("*.md")))
+            decisions = len({p.name for p in (repo.root / docs_paths(cfg)["decisions"]).glob("*.md")}
+                            - {"README.md", "_template.md"})
             due = "，考虑跑一次复盘（governance-review.md）" if decisions >= 20 else ""
             check("governance-budget", True, f"{detail}；决策 {decisions} 条{due}", "")
+    # 决策索引：新建即登记（§6），索引指向不存在文件 = 索引在说谎
+    decisions_dir = repo.root / docs_paths(cfg)["decisions"]
+    if decisions_dir.is_dir():
+        rep = decisions_index_report(decisions_dir)
+        if rep["missing_index"]:
+            check("decisions-index", False,
+                  f"{docs_paths(cfg)['decisions']}/README.md 不存在（索引是决策的唯一可查面）",
+                  "按 docs/decisions/_template.md 建索引并逐条登记")
+        elif rep["orphans"] or rep["dead"]:
+            parts = []
+            if rep["orphans"]:
+                parts.append(f"{len(rep['orphans'])} 份未登记：{'、'.join(rep['orphans'][:3])}")
+            if rep["dead"]:
+                parts.append(f"{len(rep['dead'])} 条索引指向不存在的文件：{'、'.join(rep['dead'][:3])}")
+            check("decisions-index", False, "；".join(parts),
+                  "新建决策即登记进 docs/decisions/README.md；死链删掉或补文件")
+        else:
+            check("decisions-index", True,
+                  f"{rep['entries']} 条索引 / {rep['files']} 份文件，双向一致", "")
 
     ok = all(c["ok"] for c in checks)
     emit(args, {"ok": ok, "transport": transport_name, "transport_source": transport_source,

@@ -78,7 +78,7 @@ Karpathy 观察 LLM 写代码的翻车姿势，归结成四条规则：
 
 | 命令 | 做什么 |
 | --- | --- |
-| `doctor` | 体检 git、编排通道、agent、会话身份、仓库是否干净 |
+| `doctor` | 体检 git、编排通道、agent、会话身份、仓库是否干净、AGENTS 预算与决策索引双向一致 |
 | `init` | 建 `.vibe/` 并写忽略规则，幂等 |
 | `task new` / `task set-acceptance` / `task set-scope` / `task abandon` | 建任务、改验收命令、调允许改动的范围、放弃 |
 | `dispatch` | 建分支与 worktree，拉起 worker，然后主管结束回合 |
