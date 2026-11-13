@@ -3,8 +3,8 @@
 > 触发：人类说"用规划与实施分离把 X 落地 / 派 worker 去做 / 并行推进这几件事"。
 > **不说就不启用**：本能力默认休眠——不建 `.vibe/`、不探测编排通道、不派生 agent。
 > 红线、预算与文档归属见 AGENTS.md（§4 合并权与 Ask-first、§5 记忆归属、§6 文档落点、§7 工作流程）；本文件只写"怎么执行"。
-> 理念与"什么时候不该用"见 `docs/design/orchestration-doctrine.md`；派工单写法见 `docs/design/dispatch-template.md`；
-> Orca 排障见 `docs/design/orchestration-orca.md`（仅人工介入时读）。控制面脚本：`scripts/foreman.py`（纯标准库）。
+> 理念与"什么时候不该用"见 `docs/governance/orchestration-doctrine.md`；派工单写法见 `docs/governance/dispatch-template.md`；
+> Orca 排障见 `docs/governance/orchestration-orca.md`（仅人工介入时读）。控制面脚本：`scripts/foreman.py`（纯标准库）。
 
 ## 一次闭环
 

@@ -15,7 +15,7 @@
 ## 已完成工作摘要
 
 - 技能包：`skills/vibe-base` 1.0.3→1.1.0，新增 `assets/scripts/foreman.py`（1879 行，纯标准库）、
-  `assets/docs/governance/orchestration.md`、`assets/docs/design/{orchestration-doctrine,orchestration-orca,dispatch-template}.md`、
+  `assets/docs/governance/` 编排四份（orchestration + doctrine + orca + dispatch-template）、
   `tests/`（79 项）
 - 规则重写（AGENTS.md 93/100 行）：§4 评审权下移到「人类或主管 Agent + Ask-first 清单为人类强制项」、
   §5 记忆归属（docs/memory 主管独占）、§3 决策档位三词、§6 纳入 `.vibe/`

@@ -6,7 +6,7 @@ description: 初始化项目的 vibe coding 治理体系，并把「规划与实
 
 # vibe-base — 治理骨架初始化 + 执行编排分发
 
-本技能承载两件事：①治理骨架的初始化流程（下文）；②规范与细则的正本分发——assets/ 含 AGENTS.md 模板、全部细则（`docs/governance/` 五份）、执行编排块（`scripts/foreman.py` + `docs/design/` 三份），随 init 一起落入项目，由项目 AGENTS.md 直接引用，不经本文件路由。
+本技能承载两件事：①治理骨架的初始化流程（下文）；②规范与细则的正本分发——assets/ 含 AGENTS.md 模板、全部细则（`docs/governance/` 五份）、执行编排块（`scripts/foreman.py` + `docs/governance/` 编排四份），随 init 一起落入项目，由项目 AGENTS.md 直接引用，不经本文件路由。
 
 ## 初始化流程
 

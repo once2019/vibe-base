@@ -54,7 +54,7 @@
 ```text
 docs/
 ├── design/      # 设计文档：架构/模块/接口设计与探索性分析（调研/比较/根因）
-├── governance/  # 治理细则：memory-writing/decision-writing/l1-maintenance/governance-review（init 实例化，见 §5/§8）
+├── governance/  # 治理细则：memory/decision/l1-maintenance/复盘 + 编排四份（init 实例化，见 §5/§8）
 ├── decisions/   # 决策记录：每个技术决策的理由与替代方案（索引 README.md）
 ├── progress/    # 执行文档：任务进度、里程碑状态
 ├── memory/      # 记忆文件：context.md、handoff.md

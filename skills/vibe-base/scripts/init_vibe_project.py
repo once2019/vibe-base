@@ -28,9 +28,9 @@ CODE_PREFIXES = ("scripts/",)
 
 # 技能自带的参考文档（随 init 发布、内容不随项目变化）：其中的 <taskId> 之类是命令字面量，不是待填项
 REFERENCE_DOCS = (
-    "docs/design/dispatch-template.md",
-    "docs/design/orchestration-doctrine.md",
-    "docs/design/orchestration-orca.md",
+    "docs/governance/dispatch-template.md",
+    "docs/governance/orchestration-doctrine.md",
+    "docs/governance/orchestration-orca.md",
 )
 
 PLACEHOLDER_RE = re.compile(r"<([^<>\n]+)>")

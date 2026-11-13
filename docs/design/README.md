@@ -14,6 +14,3 @@
 一行一份：`文件名｜一句话职责`，新建即登记，更新前先查（规则见 AGENTS.md §6 权威文档唯一）。
 
 - governance-retrospective.md｜治理复盘方法论与反模式正本
-- orchestration-doctrine.md｜执行编排理念：为什么是隔离/事件/状态三层、什么时候不该用
-- orchestration-orca.md｜Orca 原生路径的机制坑与人工介入（仅排障时读）
-- dispatch-template.md｜派工单各节写法与修改规则

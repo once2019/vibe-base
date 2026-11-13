@@ -2,7 +2,7 @@
 
 - 变更日期：2026-11-13
 - 变更原因：并入 vibe-base 治理体系——操作面统一指向 `docs/governance/orchestration.md`，过程态目录改为 `.vibe/`
-- 关联：`docs/governance/orchestration.md`（操作面与落点分工）、`docs/design/dispatch-template.md`（派工单写法）
+- 关联：`docs/governance/orchestration.md`（操作面与落点分工）、`docs/governance/dispatch-template.md`（派工单写法）
 
 ## 为什么是这三层
 
