@@ -8,6 +8,7 @@
 ## 本会话已完成
 
 - 无进行时条目——完成项已移交 docs/progress/2026-11-13-单技能融合执行编排.md
+- 状态机补齐（2026-11-13 夜）：escalation 落状态机、`reconcile` 对账、doctor 第 16 项
 - 冻结：`~/storyboard-maker`（等技能定稿后整体升级，见 handoff 未完成清单）
 
 ## 进行中任务
@@ -16,7 +17,7 @@
 
 ## 下一步计划
 
-1. 人工重装两个 agent 的技能目录（`~/.pi/agent/skills`、`~/.codex/skills`），旧 vibe-foreman 目录删除
+1. 无待办；技能目录重装与 zip 打包已按人类要求删除
 2. 在有编排通道的会话里跑一次真实 E2E（dispatch → DONE → review → merge → report）
 3. skills/vibe-base.zip 重打包（上传属 Ask-first，需用户确认）
 
