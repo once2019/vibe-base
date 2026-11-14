@@ -841,14 +841,14 @@ class TestOrcaTransport(TempGitRepoMixin):
         self.set_event("[FOREMAN:DONE] task=T-001 dispatch=D-001\n完成")
         self.assertEqual(self.run_events(), 0)
         self.assertEqual(foreman.main(["review", "T-001", "--repo", str(self.root)]), 0)
-        boom = {"worktree_removed": False, "branch_deleted": False,
-                "worker_released": True, "notes": ["Orca worktree rm 失败（模拟）"]}
+        boom = {"worktree_removed": True, "branch_deleted": True,
+                "worker_released": False, "notes": ["worker release 失败（模拟）"]}
         with patch.object(foreman.Orca, "cleanup", return_value=boom):
             self.assertEqual(foreman.main(["merge", "T-001", "--repo", str(self.root)]), 0)
         task = self.repo.load_task("T-001")
         self.assertEqual(task["status"], "completed")
-        self.assertFalse(task["cleanup"]["worktree_removed"])
-        self.assertIn("Orca worktree rm 失败", " ".join(task["cleanup"]["notes"]))
+        self.assertFalse(task["cleanup"]["worker_released"])
+        self.assertIn("worker release 失败", " ".join(task["cleanup"]["notes"]))
         self.assertIn("cleanup-incomplete", [e["event"] for e in task["log"]])
         self.assertTrue(foreman.resource_leaks(self.repo), "未完成的清理必须被 resource_leaks 看见")
 
@@ -872,6 +872,13 @@ class TestResourceCleanup(TempGitRepoMixin):
                             "worktree_selector": "repo-1::/tmp/wt-x", "branch": "b"}],
             "asks": [], "gates": [], "decisions": [], "log": [], "created_at": "x", "updated_at": "x",
         })
+
+    def test_cleanup_result_carries_dispatch_id(self) -> None:
+        """清理结果要能指认是哪次派工——resource_leaks 的定位信息依赖它。"""
+        o = foreman.Orca(self.repo, foreman.effective_config(self.repo))
+        o.bin = str(FIXTURE_ORCA)
+        res = o.cleanup(self.repo, {"id": "D-007", "worker_handle": "w", "worktree_selector": ""})
+        self.assertEqual(res["dispatch"], "D-007")
 
     def test_hcom_cleanup_removes_tree_and_branch(self) -> None:
         self.full_task()
@@ -941,6 +948,7 @@ class TestResourceCleanup(TempGitRepoMixin):
         self.assertEqual(len(leaks), 1)
         self.assertIn("清理未完成", leaks[0]["problem"])
         self.assertIn("rm 失败", leaks[0]["hint"])
+        self.assertEqual(leaks[0]["dispatch"], "D-001", "泄漏记录必须带派工 id，否则定位不到是哪次派工")
 
     def test_doctor_reports_resource_leaks(self) -> None:
         task_dir = self.repo.task_dir("T-001")

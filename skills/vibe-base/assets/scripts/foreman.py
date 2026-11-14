@@ -583,8 +583,8 @@ class Transport:
         **绝不抛异常**：调用点在状态落盘之后，这里抛会把「已合并」变成「状态没变」。
         结果结构化，供 task["cleanup"] 留档与 doctor 核对。
         """
-        return {"worktree_removed": None, "branch_deleted": None,
-                "worker_released": None, "notes": []}
+        return {"dispatch": dispatch.get("id"), "worktree_removed": None,
+                "branch_deleted": None, "worker_released": None, "notes": []}
 
 
 _CONTEXT_CACHE: dict[str, dict] = {}
@@ -658,6 +658,9 @@ def effective_config(repo: Repo, cfg: dict | None = None) -> dict:
     return cfg
 
 
+# 清理结果的四项：False 即未完成。cmd_merge 判断「未完成」与 resource_leaks 报告共用一份定义
+CLEANUP_RESULT_KEYS = ("worktree_removed", "branch_deleted", "worker_released",
+                       "orchestration_task_settled")
 RECONCILE_OPEN_STATUSES = ("dispatched", "running", "waiting_answer", "waiting_human")
 PROTOCOL_KIND = {"ASK": "ask", "DONE": "done", "ESCALATE": "escalate"}
 
@@ -923,13 +926,13 @@ class Hcom(Transport):
                 "detail": f"{name} 已被 {where} 的会话占用：worker 的 DONE/ASK 会串到那个仓",
                 "fix": f"init --foreman-name {slugify(self.repo.root.name)}-foreman（改名后重启会话），或等那个会话结束"}
 
-
     def cleanup(self, repo: Repo, dispatch: dict) -> dict:
-        res: dict = {"worktree_removed": None, "branch_deleted": None,
-                     "worker_released": None, "notes": []}
-        wt = Path(str(dispatch.get("worktree") or ""))
+        res: dict = {"dispatch": dispatch.get("id"), "worktree_removed": None,
+                     "branch_deleted": None, "worker_released": None, "notes": []}
+        wt_raw = str(dispatch.get("worktree") or "")
+        wt = Path(wt_raw)
         branch = str(dispatch.get("branch") or "")
-        if str(wt) and str(wt) != ".":
+        if wt_raw:
             if not wt.exists():
                 # 目录已消失：目的已达成，顺手清掉可能残留的 worktree 元数据
                 repo.git_try("worktree", "prune")
@@ -1302,8 +1305,8 @@ class Orca(Transport):
         return checks
 
     def cleanup(self, repo: Repo, dispatch: dict) -> dict:
-        res: dict = {"worktree_removed": None, "branch_deleted": None,
-                     "worker_released": None, "notes": []}
+        res: dict = {"dispatch": dispatch.get("id"), "worktree_removed": None,
+                     "branch_deleted": None, "worker_released": None, "notes": []}
         handle = str(dispatch.get("worker_handle") or "")
         if handle.startswith("dispatch:"):
             did = handle.split(":", 1)[1]
@@ -1512,8 +1515,7 @@ def resource_leaks(repo: Repo) -> list[dict]:
                                   "hint": f"git worktree remove --force {wt}；"
                                           f"Orca 托管树用 orca worktree rm --worktree <selector> --force --delete-branch"})
             cleanup = task.get("cleanup") or {}
-            bad = [k for k in ("worktree_removed", "branch_deleted", "worker_released",
-                               "orchestration_task_settled") if cleanup.get(k) is False]
+            bad = [k for k in CLEANUP_RESULT_KEYS if cleanup.get(k) is False]
             if bad:
                 leaks.append({"task": task["id"], "dispatch": cleanup.get("dispatch"),
                               "problem": f"清理未完成：{', '.join(bad)}",
@@ -2594,8 +2596,7 @@ def cmd_merge(args: argparse.Namespace) -> int:
     cleaned = make_transport(repo, cfg).cleanup(repo, dispatch)
     task["cleanup"] = dict(cleaned, at=now_iso())
     repo.log_task(task, "cleaned", "; ".join(cleaned.get("notes") or []) or "无清理动作")
-    leftover = [k for k in ("worktree_removed", "branch_deleted", "worker_released",
-                            "orchestration_task_settled") if cleaned.get(k) is False]
+    leftover = [k for k in CLEANUP_RESULT_KEYS if cleaned.get(k) is False]
     if leftover:
         repo.log_task(task, "cleanup-incomplete",
                       f"清理未完成：{', '.join(leftover)}；见 task['cleanup']['notes']")

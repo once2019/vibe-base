@@ -43,3 +43,18 @@
   `task["cleanup"]` 是新增可选字段，旧任务缺失时 `resource_leaks` 只看 worktree 是否存在
 - 实测：测试 164 → 172；五处变异全部转红（先落盘、abandon 条件、hcom prune、
   doctor 报泄漏、cleanup 记录计入泄漏）。storyboard-maker：已完成任务 22/22 无 worktree 残留
+
+## 审查修订（同日，五轴审查发现）
+
+1. **`cleanup` 结果缺 `dispatch`**：`resource_leaks` 读 `cleanup["dispatch"]` 定位派工，但两份实现
+   都没写这个键，doctor 永远显示 `T-001/-`。三处构造函数补 `"dispatch": dispatch.get("id")`。
+2. **清理结果键列表写了两遍**（`cmd_merge` 的 leftover 判定与 `resource_leaks` 的报告），
+   以后加一项要改两处、漏一处 doctor 就看不见。提成 `CLEANUP_RESULT_KEYS` 常量。
+3. **`Hcom.cleanup` 的判空隐晦**：`Path("")` 得到 `Path(".")`，`if str(wt) and str(wt) != "."`
+   实际只有后半句起作用。改成先取原始字符串再判。
+4. Hcom 类内 cleanup 前多一个空行（类内方法间是单空行）。
+
+变异确认：Orca 侧漏 `dispatch` 由 `test_cleanup_result_carries_dispatch_id` 接住；
+`CLEANUP_RESULT_KEYS` 漏 `worker_released` 由 `test_incomplete_cleanup_is_recorded_structurally` 接住
+（原测试的 boom 里 worktree 也是 False，两个键任一命中都算未完成，等于没测到具体键——已改成只让
+`worker_released` 失败）。
