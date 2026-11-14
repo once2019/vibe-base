@@ -577,8 +577,14 @@ class Transport:
     def doctor_checks(self, repo: Repo, cfg: dict) -> list[dict]:
         return []
 
-    def cleanup(self, repo: Repo, dispatch: dict) -> list[str]:
-        return []
+    def cleanup(self, repo: Repo, dispatch: dict) -> dict:
+        """释放一次派工占用的资源（worktree / 分支 / worker）。
+
+        **绝不抛异常**：调用点在状态落盘之后，这里抛会把「已合并」变成「状态没变」。
+        结果结构化，供 task["cleanup"] 留档与 doctor 核对。
+        """
+        return {"worktree_removed": None, "branch_deleted": None,
+                "worker_released": None, "notes": []}
 
 
 _CONTEXT_CACHE: dict[str, dict] = {}
@@ -916,6 +922,36 @@ class Hcom(Transport):
         return {"name": "hcom-name", "ok": False,
                 "detail": f"{name} 已被 {where} 的会话占用：worker 的 DONE/ASK 会串到那个仓",
                 "fix": f"init --foreman-name {slugify(self.repo.root.name)}-foreman（改名后重启会话），或等那个会话结束"}
+
+
+    def cleanup(self, repo: Repo, dispatch: dict) -> dict:
+        res: dict = {"worktree_removed": None, "branch_deleted": None,
+                     "worker_released": None, "notes": []}
+        wt = Path(str(dispatch.get("worktree") or ""))
+        branch = str(dispatch.get("branch") or "")
+        if str(wt) and str(wt) != ".":
+            if not wt.exists():
+                # 目录已消失：目的已达成，顺手清掉可能残留的 worktree 元数据
+                repo.git_try("worktree", "prune")
+                res["worktree_removed"] = True
+                res["notes"].append(f"worktree {wt} 已不存在（prune 元数据）")
+            else:
+                proc = repo.git_try("worktree", "remove", "--force", str(wt))
+                if proc.returncode != 0:
+                    # 目录在但 .git 丢了（人工删除/恢复备份）：prune 后重试一次
+                    repo.git_try("worktree", "prune")
+                    proc = repo.git_try("worktree", "remove", "--force", str(wt))
+                res["worktree_removed"] = proc.returncode == 0
+                res["notes"].append(
+                    f"worktree {wt} 已删" if proc.returncode == 0 else
+                    f"worktree {wt} 删除失败（{(proc.stderr or '').strip()[:120]}）；"
+                    f"人工 `git worktree prune` 后重试")
+        if branch:
+            proc = repo.git_try("branch", "-D", branch)
+            res["branch_deleted"] = proc.returncode == 0
+            res["notes"].append(f"分支 {branch} 已删" if proc.returncode == 0 else
+                                f"分支 {branch} 删除失败（{(proc.stderr or '').strip()[:120]}）")
+        return res
 
 
 class Orca(Transport):
@@ -1265,26 +1301,33 @@ class Orca(Transport):
                                "fix": "foreman.py reconcile 看明细（消息可能已被旁路消费）" if fails else ""})
         return checks
 
-    def cleanup(self, repo: Repo, dispatch: dict) -> list[str]:
-        done = []
+    def cleanup(self, repo: Repo, dispatch: dict) -> dict:
+        res: dict = {"worktree_removed": None, "branch_deleted": None,
+                     "worker_released": None, "notes": []}
         handle = str(dispatch.get("worker_handle") or "")
         if handle.startswith("dispatch:"):
             did = handle.split(":", 1)[1]
             proc = self._run("orchestration", "worker-release", "--dispatch", did, "--json", timeout=300)
-            done.append(f"worker {did} 已 release" if proc.returncode == 0 else
-                        f"worker {did} release 未成功（可能仍活；用 orca orchestration worker-stop 或 terminal close 兜底）")
+            res["worker_released"] = proc.returncode == 0
+            res["notes"].append(f"worker {did} 已 release" if proc.returncode == 0 else
+                                f"worker {did} release 未成功（可能仍活；用 orca orchestration worker-stop 或 terminal close 兜底）")
         orch_task = dispatch.get("orchestration_task")
         if orch_task:
             proc = self._run("orchestration", "task-update", "--id", orch_task, "--status", "completed",
                              "--result", f"foreman {dispatch.get('id')} 已合并并清理", "--json", timeout=300)
-            done.append(f"orchestration task {orch_task} 已结算 completed" if proc.returncode == 0 else
-                        f"orchestration task {orch_task} 结算失败（orca orchestration task-list 查看）")
+            res["orchestration_task_settled"] = proc.returncode == 0
+            res["notes"].append(f"orchestration task {orch_task} 已结算 completed" if proc.returncode == 0 else
+                                f"orchestration task {orch_task} 结算失败（orca orchestration task-list 查看）")
         sel = dispatch.get("worktree_selector")
         if sel:
-            self._ok_json(self._run("worktree", "rm", "--worktree", sel, "--force", "--delete-branch",
-                                    "--json", timeout=300), "orchestration worktree rm")
-            done.append(f"Orca worktree {sel} 已删（含分支）")
-        return done
+            proc = self._run("worktree", "rm", "--worktree", sel, "--force", "--delete-branch",
+                             "--json", timeout=300)
+            res["worktree_removed"] = proc.returncode == 0
+            res["branch_deleted"] = proc.returncode == 0
+            res["notes"].append(f"Orca worktree {sel} 已删（含分支）" if proc.returncode == 0 else
+                                f"Orca worktree {sel} 删除失败（{(proc.stderr or proc.stdout or '').strip()[:120]}）；"
+                                f"`orca worktree rm --worktree {sel} --force --delete-branch` 重试")
+        return res
 
 
 # ---------------------------------------------------------------- 消息与派工单
@@ -1447,6 +1490,37 @@ def _decision_entries(readme: Path) -> list[str]:
     return entries
 
 
+def resource_leaks(repo: Repo) -> list[dict]:
+    """已完成任务仍占着资源（worktree 目录存在 / cleanup 记录失败）的清单。
+
+    资源泄漏只会发生在「合并后」：completed 是终态，不会再有人回头看它，
+    所以必须由体检主动查，否则树和分支会一直占着磁盘与 git 元数据。
+    """
+    leaks: list[dict] = []
+    for base in (repo.archive_dir, repo.tasks_dir):
+        if not base.is_dir():
+            continue
+        for p in sorted(base.glob("*/task.json")):
+            task = read_json(p)
+            if task.get("status") != "completed":
+                continue
+            for d in task.get("dispatches") or []:
+                wt = str(d.get("worktree") or "")
+                if wt and Path(wt).exists():
+                    leaks.append({"task": task["id"], "dispatch": d.get("id"),
+                                  "problem": f"worktree 仍在：{wt}",
+                                  "hint": f"git worktree remove --force {wt}；"
+                                          f"Orca 托管树用 orca worktree rm --worktree <selector> --force --delete-branch"})
+            cleanup = task.get("cleanup") or {}
+            bad = [k for k in ("worktree_removed", "branch_deleted", "worker_released",
+                               "orchestration_task_settled") if cleanup.get(k) is False]
+            if bad:
+                leaks.append({"task": task["id"], "dispatch": cleanup.get("dispatch"),
+                              "problem": f"清理未完成：{', '.join(bad)}",
+                              "hint": " ".join(cleanup.get("notes") or [])[:200]})
+    return leaks
+
+
 def decisions_index_report(decisions_dir: Path) -> dict:
     """决策索引与实际文件的双向核对：孤儿（文件未登记）与死链（索引指向不存在）。
 
@@ -1573,6 +1647,16 @@ def cmd_doctor(args: argparse.Namespace) -> int:
                             - {"README.md", "_template.md"})
             due = "，考虑跑一次复盘（governance-review.md）" if decisions >= 20 else ""
             check("governance-budget", True, f"{detail}；决策 {decisions} 条{due}", "")
+    # 资源泄漏：completed 是终态，没人会回头看，只能靠体检
+    leaks = resource_leaks(repo)
+    if leaks:
+        check("resource-leaks", False,
+              f"{len(leaks)} 处资源未释放：" +
+              "；".join(f"{x['task']}/{x.get('dispatch') or '-'} {x['problem']}" for x in leaks[:3]),
+              "按 hint 手工清理（合并后残留的 worktree / 分支 / worker）；资源不回收会一直占磁盘")
+    else:
+        check("resource-leaks", True, "已完成任务无 worktree/分支残留", "")
+
     # 决策索引：新建即登记（§6），索引指向不存在文件 = 索引在说谎
     decisions_dir = repo.root / docs_paths(cfg)["decisions"]
     if not decisions_dir.is_dir():
@@ -1747,7 +1831,8 @@ def cmd_task_set_acceptance(args: argparse.Namespace) -> int:
 def cmd_task_abandon(args: argparse.Namespace) -> int:
     """放弃当前派工（worker 死亡/不可恢复），置 failed 以便重派或交人类。"""
     repo = Repo(Path(args.repo))
-    assert_coordinator(repo, effective_config(repo))
+    cfg = effective_config(repo)
+    assert_coordinator(repo, cfg)
     task = repo.load_task(args.task_id)
     if task["status"] not in {"dispatched", "running", "waiting_answer", "waiting_human", "review"}:
         fail(f"任务 {task['id']} 状态为 {task['status']}，只有 worker 活动阶段可 abandon")
@@ -1756,11 +1841,24 @@ def cmd_task_abandon(args: argparse.Namespace) -> int:
     else:
         repo.set_status(task, "failed")
     repo.log_task(task, task["status"], f"主管放弃本派工：{args.reason}")
+    dispatch = task["dispatches"][-1] if task["dispatches"] else None
+    if task["status"] == "blocked" and dispatch:
+        # blocked 不会再重派：worktree 与 worker 留着就是永久泄漏
+        repo.save_task(task)  # 先落盘，清理失败不影响状态
+        cleaned = make_transport(repo, cfg).cleanup(repo, dispatch)
+        task["cleanup"] = dict(cleaned, at=now_iso())
+        repo.log_task(task, "cleaned", "; ".join(cleaned.get("notes") or []) or "无清理动作")
+    elif dispatch:
+        repo.log_task(task, "cleanup-skipped",
+                      f"worktree {dispatch.get('worktree')} 保留待重派复用；"
+                      f"worker {dispatch.get('worker_handle')} 若仍存活需手工 stop")
     repo.save_task(task)
-    emit(args, {"id": task["id"], "status": task["status"], "reason": args.reason},
-         f"{task['id']} 已放弃本派工（{args.reason}）→ {task['status']}；"
-         + ("尝试次数已用尽，交人类解锁后再 dispatch" if task["status"] == "blocked"
-            else f"可 dispatch 重派（尝试 {task['attempts']}/{repo.config().get('max_attempts', 3)}）"))
+    tail = ("尝试次数已用尽，交人类解锁后再 dispatch；资源已清理" if task["status"] == "blocked"
+            else f"可 dispatch 重派（尝试 {task['attempts']}/{repo.config().get('max_attempts', 3)}），"
+                 "worktree 保留复用")
+    emit(args, {"id": task["id"], "status": task["status"], "reason": args.reason,
+                "cleanup": task.get("cleanup")},
+         f"{task['id']} 已放弃本派工（{args.reason}）→ {task['status']}；{tail}")
     return EXIT_OK
 
 
@@ -2489,16 +2587,18 @@ def cmd_merge(args: argparse.Namespace) -> int:
     }
     repo.set_status(task, "completed")
     repo.log_task(task, "completed", f"合并 {merge_commit}，复跑验收通过，开始清理")
+    # 先落盘：合并已经是既成事实，清理失败不能把任务退回 merge_ready（否则会二次合并）
+    repo.save_task(task)
 
-    # 清理：删 worktree 与分支（completed 定义的一部分；Orca 模式走 transport）
-    if cfg.get("transport") == "orca":
-        done = make_transport(repo, cfg).cleanup(repo, dispatch)
-        repo.log_task(task, "cleaned", "; ".join(done) or "无清理动作")
-    else:
-        if wt.exists():
-            repo.git("worktree", "remove", "--force", str(wt))
-        repo.git("branch", "-D", branch)
-        repo.log_task(task, "cleaned", f"已删除 worktree 与分支 {branch}")
+    # 清理：删 worktree / 分支 / 结算 worker。失败只记结果，由 task["cleanup"] 与 doctor 暴露
+    cleaned = make_transport(repo, cfg).cleanup(repo, dispatch)
+    task["cleanup"] = dict(cleaned, at=now_iso())
+    repo.log_task(task, "cleaned", "; ".join(cleaned.get("notes") or []) or "无清理动作")
+    leftover = [k for k in ("worktree_removed", "branch_deleted", "worker_released",
+                            "orchestration_task_settled") if cleaned.get(k) is False]
+    if leftover:
+        repo.log_task(task, "cleanup-incomplete",
+                      f"清理未完成：{', '.join(leftover)}；见 task['cleanup']['notes']")
     repo.save_task(task)
 
     # 归档：把任务目录移到 archive/，后续 report/show 自动从 archive 读
@@ -2509,8 +2609,11 @@ def cmd_merge(args: argparse.Namespace) -> int:
         if dst.exists():
             shutil.rmtree(dst)
         shutil.move(str(src), str(dst))
-    emit(args, {"id": task["id"], "status": "completed", "commit": merge_commit, "branch": branch},
-         f"{task['id']} 完成：合并 {merge_commit}（--no-ff），复跑验收通过，worktree/分支已删，任务归档到 {dst}\n收尾运行 report {task['id']} 生成竣工单。默认不 push。")
+    clean_word = "worktree/分支已删" if not leftover else f"清理未完成（{', '.join(leftover)}）"
+    emit(args, {"id": task["id"], "status": "completed", "commit": merge_commit,
+                "branch": branch, "cleanup": task.get("cleanup")},
+         f"{task['id']} 完成：合并 {merge_commit}（--no-ff），复跑验收通过，{clean_word}，"
+         f"任务归档到 {dst}\n收尾运行 report {task['id']} 生成竣工单。默认不 push。")
     return EXIT_OK
 
 

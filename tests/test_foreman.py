@@ -16,6 +16,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 SCRIPTS = Path(__file__).resolve().parent.parent / "skills" / "vibe-base" / "assets" / "scripts"
 sys.path.insert(0, str(SCRIPTS))
@@ -814,9 +815,148 @@ class TestOrcaTransport(TempGitRepoMixin):
         self.assertEqual(rm[-1][rm[-1].index("--worktree") + 1], f"repo-1::{self.wt}")
         self.assertIn("--delete-branch", rm[-1])
 
+    def test_cleanup_failure_keeps_completed_and_records_it(self) -> None:
+        """清理失败不能把已合并的任务退回 merge_ready：状态先落盘，失败只记进 cleanup。"""
+        (self.wt / "src" / "feature.txt").write_text("done\n", encoding="utf-8")
+        self.commit_in(self.wt, "feat: x")
+        self.set_event("[FOREMAN:DONE] task=T-001 dispatch=D-001\n完成")
+        self.assertEqual(self.run_events(), 0)
+        self.assertEqual(foreman.main(["review", "T-001", "--repo", str(self.root)]), 0)
+        # 真崩溃（不只是返回 False）：合并已落库，异常也不能让状态退回 merge_ready
+        with patch.object(foreman.Orca, "cleanup", side_effect=RuntimeError("rm 崩了")):
+            with self.assertRaises(RuntimeError):
+                foreman.main(["merge", "T-001", "--repo", str(self.root)])
+        task = self.repo.load_task("T-001")
+        self.assertEqual(task["status"], "completed", "清理崩溃不许回退状态（否则会二次合并）")
+        self.assertEqual(task["merge"]["commit"],
+                         subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=self.root,
+                                        capture_output=True, text=True).stdout.strip())
+        # 文件系统：任务已归档，report 仍能出竣工单（不被清理失败挡住）
+        self.assertEqual(foreman.main(["report", "T-001", "--repo", str(self.root)]), 0)
+
+    def test_incomplete_cleanup_is_recorded_structurally(self) -> None:
+        """cleanup 返回 False 时写结构化结果 + cleanup-incomplete 日志，供 doctor 核对。"""
+        (self.wt / "src" / "feature.txt").write_text("done\n", encoding="utf-8")
+        self.commit_in(self.wt, "feat: x")
+        self.set_event("[FOREMAN:DONE] task=T-001 dispatch=D-001\n完成")
+        self.assertEqual(self.run_events(), 0)
+        self.assertEqual(foreman.main(["review", "T-001", "--repo", str(self.root)]), 0)
+        boom = {"worktree_removed": False, "branch_deleted": False,
+                "worker_released": True, "notes": ["Orca worktree rm 失败（模拟）"]}
+        with patch.object(foreman.Orca, "cleanup", return_value=boom):
+            self.assertEqual(foreman.main(["merge", "T-001", "--repo", str(self.root)]), 0)
+        task = self.repo.load_task("T-001")
+        self.assertEqual(task["status"], "completed")
+        self.assertFalse(task["cleanup"]["worktree_removed"])
+        self.assertIn("Orca worktree rm 失败", " ".join(task["cleanup"]["notes"]))
+        self.assertIn("cleanup-incomplete", [e["event"] for e in task["log"]])
+        self.assertTrue(foreman.resource_leaks(self.repo), "未完成的清理必须被 resource_leaks 看见")
+
     def test_orca_events_timeout(self) -> None:
         os.environ.pop("FAKE_ORCA_EVENT", None)
         self.assertEqual(self.run_events(), 1)
+
+
+class TestResourceCleanup(TempGitRepoMixin):
+    """合并/放弃后的资源回收：completed 是终态，没人回头看，清理必须幂等且不毁状态。"""
+
+    def _orca_task(self) -> None:
+        """Orca 模式下走到 completed 前一刻：任务已合并，dispatch 记录齐备。"""
+        cfg = dict(self.repo.config(), transport="orca")
+        foreman.write_json(self.repo.config_path, cfg)
+        foreman.write_json(self.repo.task_dir("T-001") / "task.json", {
+            "id": "T-001", "title": "t", "slug": "t", "status": "completed", "attempts": 1,
+            "scope": ["src/"], "acceptance": "true", "docs": {"progress": None, "decisions": []},
+            "dispatches": [{"id": "D-001", "worker_handle": "dispatch:ctx-1", "run_id": "run-1",
+                            "orchestration_task": "task-1", "worktree": str(self.root / "wt-x"),
+                            "worktree_selector": "repo-1::/tmp/wt-x", "branch": "b"}],
+            "asks": [], "gates": [], "decisions": [], "log": [], "created_at": "x", "updated_at": "x",
+        })
+
+    def test_hcom_cleanup_removes_tree_and_branch(self) -> None:
+        self.full_task()
+        self.dispatch()
+        task = self.repo.load_task("T-001")
+        dispatch = task["dispatches"][-1]
+        wt, branch = Path(dispatch["worktree"]), dispatch["branch"]
+        self.assertTrue(wt.exists())
+        res = foreman.Hcom(self.repo, self.repo.config()).cleanup(self.repo, dispatch)
+        self.assertTrue(res["worktree_removed"])
+        self.assertTrue(res["branch_deleted"])
+        self.assertFalse(wt.exists())
+        self.assertNotEqual(
+            subprocess.run(["git", "rev-parse", "--verify", branch], cwd=self.root,
+                           capture_output=True, text=True).returncode, 0)
+
+    def test_hcom_cleanup_prunes_when_dir_already_gone(self) -> None:
+        """目录被手工删掉（元数据残留）：prune 兜底，仍要删分支且不抛。"""
+        self.full_task()
+        self.dispatch()
+        dispatch = self.repo.load_task("T-001")["dispatches"][-1]
+        wt = Path(dispatch["worktree"])
+        subprocess.run(["rm", "-rf", str(wt)], check=False)
+        res = foreman.Hcom(self.repo, self.repo.config()).cleanup(self.repo, dispatch)
+        self.assertTrue(res["worktree_removed"])
+        self.assertTrue(res["branch_deleted"])
+        self.assertIn("prune", " ".join(res["notes"]))
+
+    def test_abandon_blocked_releases_resources(self) -> None:
+        """blocked 不会再重派：worktree 留着就是永久泄漏，必须清。"""
+        self.full_task()
+        self.dispatch()
+        task = self.repo.load_task("T-001")
+        task["attempts"] = 3
+        foreman.write_json(self.repo.task_dir("T-001") / "task.json", task)
+        wt = Path(task["dispatches"][-1]["worktree"])
+        self.assertEqual(foreman.main(["task", "abandon", "T-001", "--repo", str(self.root),
+                                       "--reason", "worker 死亡"]), 0)
+        after = self.repo.load_task("T-001")
+        self.assertEqual(after["status"], "blocked")
+        self.assertFalse(wt.exists(), "blocked 任务不应保留 worktree")
+        self.assertIn("cleanup", after)
+
+    def test_abandon_failed_keeps_worktree_for_retry(self) -> None:
+        """failed 可重派且复用同一棵树：不能删。"""
+        self.full_task()
+        self.dispatch()
+        task = self.repo.load_task("T-001")
+        wt = Path(task["dispatches"][-1]["worktree"])
+        self.assertEqual(foreman.main(["task", "abandon", "T-001", "--repo", str(self.root),
+                                       "--reason", "换个 agent 重来"]), 0)
+        after = self.repo.load_task("T-001")
+        self.assertEqual(after["status"], "failed")
+        self.assertTrue(wt.exists(), "可重派任务的 worktree 必须保留复用")
+        self.assertNotIn("cleanup", after)
+        self.assertTrue(any(e["event"] == "cleanup-skipped" for e in after["log"]))
+
+    def test_cleanup_failure_record_is_visible_even_without_dir(self) -> None:
+        """worktree 目录已不在、但 cleanup 记录失败：靠结构化字段也要能看见。"""
+        foreman.write_json(self.repo.task_dir("T-001") / "task.json", {
+            "id": "T-001", "title": "t", "status": "completed", "attempts": 1,
+            "dispatches": [{"id": "D-001", "worktree": str(self.root / "gone")}],
+            "cleanup": {"worktree_removed": False, "notes": ["rm 失败（模拟）"], "dispatch": "D-001"},
+            "log": [], "docs": {}, "asks": [], "gates": [], "decisions": [],
+        })
+        leaks = foreman.resource_leaks(self.repo)
+        self.assertEqual(len(leaks), 1)
+        self.assertIn("清理未完成", leaks[0]["problem"])
+        self.assertIn("rm 失败", leaks[0]["hint"])
+
+    def test_doctor_reports_resource_leaks(self) -> None:
+        task_dir = self.repo.task_dir("T-001")
+        foreman.write_json(task_dir / "task.json", {
+            "id": "T-001", "title": "t", "status": "completed", "attempts": 1,
+            "dispatches": [{"id": "D-001", "worktree": str(self.root / "leftover")}],
+            "log": [], "docs": {}, "asks": [], "gates": [], "decisions": [],
+        })
+        (self.root / "leftover").mkdir()
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            foreman.main(["doctor", "--repo", str(self.root)])
+        self.assertIn("[FAIL] resource-leaks", out.getvalue())
+        leaks = foreman.resource_leaks(self.repo)
+        self.assertEqual(len(leaks), 1)
+        self.assertIn("leftover", leaks[0]["problem"])
 
 
 class TestAskFirstDecisionRecord(TempGitRepoMixin):

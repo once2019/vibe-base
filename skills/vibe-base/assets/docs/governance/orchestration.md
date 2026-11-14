@@ -31,6 +31,8 @@ python3 $F events --timeout 300     # 消费这一条：落 evidence、推进状
 python3 $F review T-001             # DONE → 审 diff + 跑验收 + 存证据
 python3 $F merge T-001              # --no-ff 合并 + 复跑验收 + 删树 + 归档
 python3 $F report T-001             # 竣工单 → docs/progress/（入库）
+# merge 内含资源回收：worktree / 分支 / worker / orchestration task
+# 回收失败不影响 completed（状态先落盘），结果写 task["cleanup"]，doctor 的 resource-leaks 会报
 ```
 
 中途的 `reply`（答复 ASK）、`ask`（Ask-first 阻塞门）都插在回合二里。
