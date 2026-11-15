@@ -21,3 +21,4 @@
 - 2026-11-13｜技能库｜[合并/放弃后的资源回收：先落盘再清理，结果结构化](2026-11-13-resource-cleanup-on-merge-and-abandon.md)｜已生效｜cleanup 契约改成不抛 + 结构化；merge 先落盘状态；abandon 只在不重派时清理；doctor 新增 resource-leaks
 - 2026-11-15｜技能库｜[吸收 ub-mode 的编码纪律](2026-11-15-adopt-ub-mode-coding-discipline.md)｜已生效｜六条 §3 未覆盖的判据落进 docs/governance/coding-discipline.md，§3 只留一行指针；质量门槛工具属 Ask-first，不默认启用；push 策略保留本仓口径
 - 2026-11-15｜技能库｜[引入三个质量门槛工具](2026-11-15-adopt-quality-gate-tools.md)｜已生效｜crapper / dryer / mutator 装机器级 `~/tools`，产物 `.metrics/` 进忽略；uml-viewer 不引入（Clojure + 图形界面）；CRAP 的覆盖率链路待定
+- 2026-11-15｜技能库｜[回流派发反思](2026-11-15-reflow-dispatch-reflection.md)｜已生效｜重派结算上一 worker、task unblock、inbox_scan_limit、scope 外路径提醒回流；修正原实现四处缺陷；worker 名字带 attempt

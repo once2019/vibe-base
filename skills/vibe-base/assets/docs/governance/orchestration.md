@@ -25,6 +25,7 @@ F=scripts/foreman.py
 python3 $F doctor --repo .          # 体检：git / 编排通道 / agent / 会话接入 / 仓库干净 / docs 落点
 python3 $F task new --repo . --title "实现 X" --scope "src/" --accept "npm test"
 python3 $F dispatch T-001           # 建 worktree/分支并拉起 worker → 结束回合
+# 重派自动先结算上一 attempt（worker-stop + release，不删树）；名字带 attempt，不复用
 
 # 回合二：被通道唤醒后（终端出现 "You have 1 orchestration message"）才跑
 python3 $F events --timeout 300     # 消费这一条：落 evidence、推进状态机
@@ -120,6 +121,13 @@ python3 scripts/foreman.py task new --repo . --title "EP1 三处修" \
 三次用完仍失败，任务进 `blocked`。这时该问的是"任务是不是拆大了"，而不是"再派一次会不会好"。
 
 同一道门连续失败两次时，先按 `coding-discipline.md`「两次失败后攻击前提」把被推翻的前提写成一句话，写进第三次的 `--retry-note`；写不出前提就转 `blocked`，不再派。
+
+`blocked` 是交人，不是死端。人工判明根因（验收环境缺陷、scope 划错、需求本身要拆）后用
+`task unblock <id> --reason "<根因>"` 回到 `failed`，重派仍须带 `--retry-note`；只有需要重新走满
+三次阶梯时才加 `--reset-attempts`。
+
+重派前会自动结算上一 attempt 的 worker（`worker-stop` + `worker-release`，只停人不删树：累计 diff 与
+cherry-pick 还要用）。不结算是僵尸会话：旧 worker 占着树，还可能发混淆的协议消息。
 
 ### 不派工的场合
 

@@ -72,7 +72,7 @@ TRANSITIONS: dict[str, set[str]] = {
     "failed": {"dispatched", "blocked"},
     "merge_ready": {"completed", "blocked"},
     "completed": set(),
-    "blocked": {"dispatched"},
+    "blocked": {"dispatched", "failed"},   # failed=人工解锁（task unblock，重派须带 retry-note）
 }
 
 WORKER_STATUSES = {"waiting_answer", "waiting_human"}  # 这些状态下 worker 在等主管回复
@@ -384,6 +384,8 @@ class Repo:
             "max_attempts": 3,
             "require_human_review": False,
             "hcom_bin": "hcom",
+            # reconcile 扫 inbox 的上限：单 run 消息量超过它才该响 WARN（实测 137 条/单 run）
+            "inbox_scan_limit": 400,
             "docs": dict(DEFAULT_DOCS),
         }
         if not self.config_path.exists():
@@ -577,6 +579,10 @@ class Transport:
     def doctor_checks(self, repo: Repo, cfg: dict) -> list[dict]:
         return []
 
+    def stop_prev_worker(self, repo: Repo, dispatch: dict) -> dict:
+        """重派前结算上一 attempt 的 worker（只停人不删树：cherry-pick/累计 diff 还要用）。"""
+        return {"notes": []}
+
     def cleanup(self, repo: Repo, dispatch: dict) -> dict:
         """释放一次派工占用的资源（worktree / 分支 / worker）。
 
@@ -746,11 +752,12 @@ def reconcile_findings(repo: Repo, cfg: dict, timeout: int = 30,
                 findings.append(dict(base, level="warn",
                                      problem=f"liveness={live}，无法确认 worker 是否还活着（任务 {row['task_status']}）",
                                      hint="worker-list --include-remote 或 worker-read 复核"))
-    messages = transport.inbox(timeout=timeout)
-    if len(messages) >= 100:
+    scan_limit = int(cfg.get("inbox_scan_limit") or 400)
+    messages = transport.inbox(timeout=timeout, limit=scan_limit)
+    if len(messages) >= scan_limit:
         findings.append({"level": "warn", "task": "-", "dispatch": "-",
-                         "problem": "inbox 已取满 100 条（更早的消息没扫到），核对结果可能不完整",
-                         "hint": "`orca orchestration inbox --json --full --limit 100` 看明细，必要时清理旧消息"})
+                         "problem": f"inbox 已取满 {scan_limit} 条（更早的消息没扫到），核对结果可能不完整",
+                         "hint": "调高 config 的 inbox_scan_limit，或清理已结算的旧消息"})
     for msg in messages:
         if str(msg.get("run_id") or "") not in runs or not msg.get("read"):
             continue
@@ -926,6 +933,24 @@ class Hcom(Transport):
                 "detail": f"{name} 已被 {where} 的会话占用：worker 的 DONE/ASK 会串到那个仓",
                 "fix": f"init --foreman-name {slugify(self.repo.root.name)}-foreman（改名后重启会话），或等那个会话结束"}
 
+    def stop_prev_worker(self, repo: Repo, dispatch: dict) -> dict:
+        """重派前结算上一 attempt：worker-stop（隔离）+ worker-release（关终端），不删 worktree/分支。
+
+        两条都是本地 daemon 调用，30 秒足够；给 300 秒会让重派卡十分钟。
+        """
+        res: dict = {"notes": []}
+        handle = str(dispatch.get("worker_handle") or "")
+        if not handle.startswith("dispatch:"):
+            return res
+        did = handle.split(":", 1)[1]
+        for cmd in ("worker-stop", "worker-release"):
+            proc = self._run("orchestration", cmd, "--dispatch", did, "--json", timeout=30)
+            if proc.returncode == 0:
+                res["notes"].append(f"上一派工 {did} 已 {cmd}")
+            else:
+                res["notes"].append(f"上一派工 {did} {cmd} 未成功（已结算的会跳过，不影响重派）")
+        return res
+
     def cleanup(self, repo: Repo, dispatch: dict) -> dict:
         res: dict = {"dispatch": dispatch.get("id"), "worktree_removed": None,
                      "branch_deleted": None, "worker_released": None, "notes": []}
@@ -954,6 +979,21 @@ class Hcom(Transport):
             res["branch_deleted"] = proc.returncode == 0
             res["notes"].append(f"分支 {branch} 已删" if proc.returncode == 0 else
                                 f"分支 {branch} 删除失败（{(proc.stderr or '').strip()[:120]}）")
+        return res
+
+
+
+    def stop_prev_worker(self, repo: Repo, dispatch: dict) -> dict:
+        """重派前停掉上一 attempt 的 hcom 实例（不删树）。停不掉也不阻断重派。"""
+        res: dict = {"notes": []}
+        name = str(dispatch.get("worker_handle") or "")
+        if not name:
+            return res
+        proc = self._run("kill", name, timeout=60)
+        if proc.returncode == 0:
+            res["notes"].append(f"上一派工 {name} 已 kill")
+        else:
+            res["notes"].append(f"上一派工 {name} kill 未成功（可能已退出，不影响重派）")
         return res
 
 
@@ -1303,6 +1343,24 @@ class Orca(Transport):
                                           f"{len(rows)} 个在途 dispatch 与 Orca 状态一致"),
                                "fix": "foreman.py reconcile 看明细（消息可能已被旁路消费）" if fails else ""})
         return checks
+
+    def stop_prev_worker(self, repo: Repo, dispatch: dict) -> dict:
+        """重派前结算上一 attempt：worker-stop（隔离）+ worker-release（关终端），不删 worktree/分支。
+
+        两条都是本地 daemon 调用，30 秒足够；给 300 秒会让重派卡十分钟。
+        """
+        res: dict = {"notes": []}
+        handle = str(dispatch.get("worker_handle") or "")
+        if not handle.startswith("dispatch:"):
+            return res
+        did = handle.split(":", 1)[1]
+        for cmd in ("worker-stop", "worker-release"):
+            proc = self._run("orchestration", cmd, "--dispatch", did, "--json", timeout=30)
+            if proc.returncode == 0:
+                res["notes"].append(f"上一派工 {did} 已 {cmd}")
+            else:
+                res["notes"].append(f"上一派工 {did} {cmd} 未成功（已结算的会跳过，不影响重派）")
+        return res
 
     def cleanup(self, repo: Repo, dispatch: dict) -> dict:
         res: dict = {"dispatch": dispatch.get("id"), "worktree_removed": None,
@@ -1865,6 +1923,30 @@ def cmd_task_set_acceptance(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def cmd_task_unblock(args: argparse.Namespace) -> int:
+    """人工解锁 blocked → failed。blocked 是交人不是死端：判明根因后从这里回到可重派。
+
+    原因必填并进 task.log（审计不缺口）。--reset-attempts 重置阶梯计数，只给
+    「人工判明根因、需要重新走满三次」的场合用。
+    """
+    repo = Repo(Path(args.repo))
+    assert_coordinator(repo, effective_config(repo))
+    task = repo.load_task(args.task_id)
+    if task["status"] != "blocked":
+        fail(f"任务 {task['id']} 状态为 {task['status']}，只有 blocked 可解锁")
+    if args.reset_attempts:
+        task["attempts"] = 0
+        note = f"人工解锁并重置重派计数：{args.reason}"
+    else:
+        note = f"人工解锁：{args.reason}"
+    repo.set_status(task, "failed")
+    repo.log_task(task, "failed", note)
+    repo.save_task(task)
+    emit(args, {"id": task["id"], "status": "failed", "attempts": task["attempts"]},
+         f"{task['id']} 已解锁为 failed（重派须带 --retry-note）：{note}")
+    return EXIT_OK
+
+
 def cmd_task_abandon(args: argparse.Namespace) -> int:
     """放弃当前派工（worker 死亡/不可恢复），置 failed 以便重派或交人类。"""
     repo = Repo(Path(args.repo))
@@ -1989,12 +2071,28 @@ def cmd_dispatch(args: argparse.Namespace) -> int:
              "（缩 scope / 补背景 / 换 agent / 换验收口径），原样重派只会再失败一次")
     if retry_note:
         task.setdefault("retry_notes", []).append({"at": now_iso(), "note": retry_note})
+        # 机械防范：重派说明点名的仓内路径若不在 scope，worker 一改就撞 scope 门。
+        # 只警告不阻断（也可能是描述性提及）。路径按「含斜杠的片段」认，不硬编码目录名。
+        mentioned = {m.group(0) for m in re.finditer(r"(?<![\w:/~.])(?:[\w.-]+/)+[\w.-]+", retry_note)}
+        outside = sorted(p for p in mentioned if not in_scope(p, task.get("scope", [])))
+        if outside:
+            print(f"警告：重派说明点名了 scope 外路径 {', '.join(outside)}"
+                  "——若需 worker 改动，先 task set-scope 扩入")
+
+    # 重派先结算上一 attempt：停 worker 终端，不删树（cherry-pick 与累计 diff 还要用）。
+    # 不结算就是僵尸会话：旧 worker 占树，还可能发混淆协议消息（2026-11-15 实测）。
+    prev = task["dispatches"][-1] if task.get("dispatches") else None
+    if is_retry and prev and prev.get("id"):
+        stopped = make_transport(repo, cfg).stop_prev_worker(repo, prev)
+        if stopped.get("notes"):
+            print("; ".join(stopped["notes"]))
 
     wt = repo.worktrees_dir / task["id"]
     branch = f"foreman/{task['id']}-{task['slug']}"
 
     dispatch_id = repo.next_dispatch_id(task)
-    worker_handle = f"w-{task['id']}"
+    # 名字带 attempt：重派不复用旧名，否则新旧 worker 同名，协议消息会混（实测 w-T-036）
+    worker_handle = f"w-{task['id']}-a{task['attempts'] + 1}"
     dispatch = {
         "id": dispatch_id, "attempt": task["attempts"] + 1, "at": now_iso(),
         "agent": None, "agent_source": None, "headless": bool(args.headless),
@@ -2801,6 +2899,15 @@ def build_parser() -> argparse.ArgumentParser:
     sp2.add_argument("--accept", required=True)
     add_json(sp2)
     sp2.set_defaults(func=cmd_task_set_acceptance)
+
+    sp2 = tsub.add_parser("unblock", help="人工解锁 blocked 任务 → failed（须带原因）")
+    sp2.add_argument("--repo", default=".")
+    sp2.add_argument("task_id")
+    sp2.add_argument("--reason", required=True, help="解锁原因（写入 task.log）")
+    sp2.add_argument("--reset-attempts", action="store_true",
+                     help="同时重置重派计数（人工判明根因后显式重启阶梯）")
+    add_json(sp2)
+    sp2.set_defaults(func=cmd_task_unblock)
 
     sp2 = tsub.add_parser("abandon", help="放弃当前派工（worker 死亡/不可恢复）")
     sp2.add_argument("--repo", default=".")

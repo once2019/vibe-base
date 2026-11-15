@@ -331,6 +331,84 @@ class TestInitAndTask(TempGitRepoMixin):
         self.assertEqual(self.repo.next_task_id(), "T-002")
 
 
+class TestDispatchReflection(TempGitRepoMixin):
+    """派发反思（2026-11-15 storyboard master 会话）：重派结算、scope 外路径提醒、人工解锁。"""
+
+    def test_retry_stops_previous_worker(self) -> None:
+        self.full_task()
+        self.dispatch()
+        task = self.repo.load_task("T-001")
+        task["status"] = "failed"
+        self.repo.save_task(task)
+        calls_before = len(self.hcom_calls())
+        self.dispatch(["--retry-note", "缩 scope 到 tests/"])
+        calls = self.hcom_calls()[calls_before:]
+        self.assertTrue(any(c[0] == "kill" and c[1] == "w-T-001" for c in calls),
+                        "重派前必须停掉上一 attempt 的 worker，否则僵尸会话占树并混淆协议消息")
+        task = self.repo.load_task("T-001")
+        self.assertEqual(task["dispatches"][-1]["id"], "D-002")
+        launch = next(c for c in calls if c[0] == "codex")
+        self.assertEqual(launch[launch.index("--name") + 1], "w-T-001-a2",
+                         "重派不复用旧名")
+
+    def test_retry_note_warns_scope_outside_path(self) -> None:
+        self.full_task()
+        self.dispatch()
+        task = self.repo.load_task("T-001")
+        task["status"] = "failed"
+        self.repo.save_task(task)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            rc = foreman.main(["dispatch", "T-001", "--repo", str(self.root), "--headless",
+                               "--retry-note", "顺便改 pipeline/other.py 的调用方"])
+        self.assertEqual(rc, 0, "提醒不阻断重派")
+        self.assertIn("scope 外路径", out.getvalue())
+        self.assertIn("pipeline/other.py", out.getvalue())
+
+    def test_retry_note_no_warning_when_path_in_scope(self) -> None:
+        self.full_task()
+        self.dispatch()
+        task = self.repo.load_task("T-001")
+        task["status"] = "failed"
+        self.repo.save_task(task)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            foreman.main(["dispatch", "T-001", "--repo", str(self.root), "--headless",
+                          "--retry-note", "继续改 src/keep.txt"])
+        self.assertNotIn("scope 外路径", out.getvalue())
+
+    def test_unblock_moves_blocked_to_failed(self) -> None:
+        self.full_task()
+        task = self.repo.load_task("T-001")
+        task["status"] = "blocked"
+        self.repo.save_task(task)
+        rc = foreman.main(["task", "unblock", "T-001", "--repo", str(self.root),
+                           "--reason", "验收环境缺陷已修"])
+        self.assertEqual(rc, 0)
+        task = self.repo.load_task("T-001")
+        self.assertEqual(task["status"], "failed")
+        notes = [x["detail"] for x in task["log"]]
+        self.assertEqual(sum("验收环境缺陷已修" in n for n in notes), 1, "解锁原因只记一次")
+        self.assertEqual(task["attempts"], 0, "默认不重置计数")
+
+    def test_unblock_reset_attempts(self) -> None:
+        self.full_task()
+        task = self.repo.load_task("T-001")
+        task["status"] = "blocked"
+        task["attempts"] = 3
+        self.repo.save_task(task)
+        rc = foreman.main(["task", "unblock", "T-001", "--repo", str(self.root),
+                           "--reason", "根因已判明", "--reset-attempts"])
+        self.assertEqual(rc, 0)
+        task = self.repo.load_task("T-001")
+        self.assertEqual(task["attempts"], 0)
+
+    def test_unblock_rejects_non_blocked(self) -> None:
+        self.full_task()
+        with self.assertRaises(SystemExit):
+            foreman.main(["task", "unblock", "T-001", "--repo", str(self.root), "--reason", "x"])
+
+
 class TestDispatch(TempGitRepoMixin):
     def test_dispatch_creates_tree_and_calls_hcom(self) -> None:
         self.full_task()
@@ -340,11 +418,13 @@ class TestDispatch(TempGitRepoMixin):
         self.assertEqual(task["attempts"], 1)
         d = task["dispatches"][0]
         self.assertEqual(d["id"], "D-001")
+        # worker_handle 记的是通道返回的实际实例名（假 hcom 固定返回 w-T-001）；
+        # 传给 --name 的是带 attempt 的名字，重派不复用旧名（否则新旧会话混淆协议消息）
         self.assertEqual(d["worker_handle"], "w-T-001")
         self.assertEqual(d["branch"], "foreman/T-001-实现-x")
         self.assertTrue(Path(d["worktree"]).exists())
         launch = next(c for c in self.hcom_calls() if c[0] == "codex")
-        self.assertEqual(launch[launch.index("--name") + 1], "w-T-001")
+        self.assertEqual(launch[launch.index("--name") + 1], "w-T-001-a1")
         self.assertIn("--dir", launch)
         self.assertIn("--headless", launch)
         prompt = launch[launch.index("--hcom-prompt") + 1]
