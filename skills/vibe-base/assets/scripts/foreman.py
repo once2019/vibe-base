@@ -1073,11 +1073,15 @@ class Orca(Transport):
         args = ["orchestration", "worker-start", "--task", task_id, "--agent", agent,
                 "--worktree", wt_arg, "--repo", sel,
                 "--base-branch", cfg["base"], "--name", name, "--json"]
+        wt_pos = args.index("--worktree") + 1
         proc = self._run(*args, timeout=600)
+        stale_trees: list[str] = []
         if proc.returncode != 0 and reuse_worktree:
-            # 旧树已被清理或未注册：降级新建，不阻断重派
-            args[args.index(wt_arg)] = "new-top-level"
+            # 旧树已被清理或未注册：降级新建，不阻断重派；旧树留给清理流程收拾
+            args[wt_pos] = "new-top-level"
             proc = self._run(*args, timeout=600)
+            if proc.returncode == 0:
+                stale_trees.append(reuse_worktree)
         if proc.returncode != 0:
             detail = ((proc.stderr or "") + (proc.stdout or "")).strip()
             if "agent-hooks-review-prompt" in detail:
@@ -1091,13 +1095,16 @@ class Orca(Transport):
             fail(f"orchestration worker-start 失败：{detail[:300]}{hint}")
         wdata = self._ok_json(proc, "orchestration worker-start")
         dispatch_id, wt_path, wt_sel, branch = self._find_worker(wdata)
-        return {
+        info = {
             "worker_handle": f"dispatch:{dispatch_id}",
             "orchestration_task": task_id,
             "worktree": wt_path,
             "worktree_selector": wt_sel,
             "branch": branch,
         }
+        if stale_trees:
+            info["stale_worktrees"] = stale_trees
+        return info
 
     def _find_id(self, data: dict) -> str | None:
         result = data.get("result") or data
@@ -1964,9 +1971,14 @@ def cmd_task_abandon(args: argparse.Namespace) -> int:
         repo.save_task(task)  # 先落盘，清理失败不影响状态
         cleaned = make_transport(repo, cfg).cleanup(repo, dispatch)
         task["cleanup"] = dict(cleaned, at=now_iso())
-        # 前几次 attempt 的树同样没用了：只清最后一次就是泄漏（T-027 三次 attempt 留了两棵）
-        stale = remove_stale_attempts(repo, task, dispatch.get("id", ""),
-                                      keep_worktree=Path(dispatch.get("worktree") or ""))
+        # 前几次 attempt 的树同样没用了：只清最后一次就是泄漏（T-027 三次 attempt 留了两棵）。
+        # cleanup 没删干净时（worktree_removed=False）最后一次的树也残留，交给 stale 一并兜底。
+        stale = remove_stale_attempts(
+            repo, task, dispatch.get("id", ""),
+            keep_worktree=(Path(dispatch["worktree"])
+                           if dispatch.get("worktree") and cleaned.get("worktree_removed") is not False
+                           else None),
+            keep_branch=dispatch.get("branch") or "")
         if stale:
             task["cleanup"]["stale_attempts"] = stale
         repo.log_task(task, "cleaned", "; ".join(cleaned.get("notes") or []) or "无清理动作")
@@ -2709,30 +2721,43 @@ def cmd_review(args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------- 命令：merge
 
 
+def _drop_tree(repo: Repo, path: str) -> bool:
+    proc = repo.git_try("worktree", "remove", "--force", path)
+    if proc.returncode != 0:
+        repo.git_try("worktree", "prune")
+        proc = repo.git_try("worktree", "remove", "--force", path)
+    return proc.returncode == 0
+
+
 def remove_stale_attempts(repo: Repo, task: dict, keep_dispatch_id: str,
-                           keep_worktree: Path | None = None) -> list[str]:
+                          keep_worktree: Path | None = None,
+                          keep_branch: str = "") -> list[str]:
     """删掉被淘汰 attempt 的树与分支（任务完成或 blocked 后没有再用处）。
 
     Orca 每个 attempt 建一棵新树，只清最后一次就是永久泄漏（实测 T-036 的 D-001/D-002）。
-    hcom 模式所有 attempt 共用一棵树，按路径相等跳过。失败只记结果，不抛。
+    hcom 模式所有 attempt 共用同一棵树与同一个分支名，按值跳过（否则会删掉在用的分支）。
+    降级新建留下的旧树记在 dispatch["stale_worktrees"]，一并清。失败只记结果，不抛。
     """
     notes: list[str] = []
+    keep_wt = keep_worktree.resolve() if keep_worktree else None
+    keep_br = keep_branch or (task.get("merge") or {}).get("branch") or ""
     for d in task.get("dispatches", []):
         if d.get("id") == keep_dispatch_id:
             continue
+        # 同一个 dispatch 内降级新建时留下的旧树（path: selector 失败）
+        for extra in d.get("stale_worktrees") or []:
+            if keep_wt and Path(extra).resolve() == keep_wt:
+                continue
+            if Path(extra).exists() and _drop_tree(repo, str(extra)):
+                notes.append(f"{d['id']} 旧树 {extra} 已删")
         old_wt = str(d.get("worktree") or "")
         old_branch = d.get("branch") or ""
-        if not old_wt or old_wt == "." or (keep_worktree and Path(old_wt) == keep_worktree):
+        if not old_wt or old_wt == "." or (keep_wt and Path(old_wt).resolve() == keep_wt):
             continue
-        old_path = Path(old_wt)
-        if old_path.exists():
-            proc = repo.git_try("worktree", "remove", "--force", old_wt)
-            if proc.returncode != 0:
-                repo.git_try("worktree", "prune")
-                proc = repo.git_try("worktree", "remove", "--force", old_wt)
-            notes.append(f"{d['id']} 树已删" if proc.returncode == 0
-                         else f"{d['id']} 树删除失败（{(proc.stderr or '').strip()[:120]}）")
-        if old_branch and old_branch != (task.get("merge") or {}).get("branch"):
+        if Path(old_wt).exists():
+            notes.append(f"{d['id']} 树已删" if _drop_tree(repo, old_wt)
+                         else f"{d['id']} 树删除失败（已 prune 重试）")
+        if old_branch and old_branch != keep_br:
             proc = repo.git_try("branch", "-D", old_branch)
             notes.append(f"{d['id']} 分支已删" if proc.returncode == 0
                          else f"{d['id']} 分支删除失败（{(proc.stderr or '').strip()[:120]}）")
@@ -2790,7 +2815,8 @@ def cmd_merge(args: argparse.Namespace) -> int:
     cleaned = make_transport(repo, cfg).cleanup(repo, dispatch)
     task["cleanup"] = dict(cleaned, at=now_iso())
     # 被淘汰 attempt 的树：任务已完成，前几次的树没有再用处
-    stale = remove_stale_attempts(repo, task, dispatch.get("id", ""), keep_worktree=wt)
+    stale = remove_stale_attempts(repo, task, dispatch.get("id", ""), keep_worktree=wt,
+                                  keep_branch=branch)
     if stale:
         task["cleanup"]["stale_attempts"] = stale
     repo.log_task(task, "cleaned", "; ".join(cleaned.get("notes") or []) or "无清理动作")

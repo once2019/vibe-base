@@ -83,3 +83,26 @@ worker 名字带 attempt 是补充：hcom 模式下 `w-{task_id}` 每次重派�
    加 `reuse_worktree` 参数，hcom 忽略（它本来就复用）。
 
 测试 182 → 186（shell 提示 2 条、abandon stale 1 条、Orca 重派复用树 1 条）。
+
+## 审查修订（2026-11-15，五轴复审 + 变异实验）
+
+复审上一轮的三处补漏，发现并修掉四个问题：
+
+1. **stale 分支误删在用的分支（Critical）**：`remove_stale_attempts` 的分支删除没有与 keep_branch
+   比较。Orca 模式各 attempt 的分支同名（`foreman/<task>-<slug>`），merge 后 stale 清理会把已合并的
+   分支再删一遍。变异实验（去掉 `!= keep_br` 判断）在 Orca 双树场景实测复现。加回 `keep_branch`
+   参数并在两个调用点传入。
+2. **树路径比较未 resolve**：`Path(old_wt) == keep_worktree` 是字面比较，`./x` 与 `x` 不等。
+   改成两侧 `resolve()`。
+3. **cleanup 失败时最后一次的树残留**（review 补的）：abandon blocked 分支里 cleanup 声称失败时，
+   原代码仍把最后一次的树当 keep（不动），泄漏照旧。改成 `worktree_removed is False` 时把
+   `keep_worktree` 置 None，让 stale 兜底所有树。
+4. **降级新建留下的旧树没人管**：Orca 重派 `path:` 失败降级 `new-top-level` 时，旧树如果其实还在
+   就成了泄漏。launch 把它记进 `dispatch["stale_worktrees"]`，`remove_stale_attempts` 一并清。
+
+变异实验八处：六处守住（M1 分支跳过、M2 bash -lc 白名单、M3 同树重派、M5 降级、M7 cleanup 失败
+keep、M8 stale_worktrees 登记四处新增测试全部转红），M4（keep_dispatch_id）与 M6（同树跳过）为
+等价变异——变异后在所有可构造场景行为不变，非守卫缺失，记录在案。
+
+测试 186 → 191（+5：Orca 双树同名分支 merge、abandon blocked 共享分支、cleanup 残留兜底、
+launch 降级、set-acceptance shell 警告）。

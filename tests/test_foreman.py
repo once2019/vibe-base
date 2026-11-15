@@ -852,6 +852,74 @@ class TestOrcaTransport(TempGitRepoMixin):
         self.assertEqual(ws[ws.index("--agent") + 1], "codex")
         self.assertNotIn("--dir", ws)  # 不建手工 worktree
 
+    def test_launch_falls_back_to_new_tree(self) -> None:
+        """path: 旧树不可用（已被清）时降级 new-top-level，不阻断重派；旧树记进 stale_worktrees。"""
+        cfg = foreman.effective_config(self.repo)
+        tr = foreman.Orca(self.repo, cfg)
+        calls = []
+
+        def fake_run(*args, timeout=30):
+            calls.append(args)
+            if "--worktree" in args and args[args.index("--worktree") + 1].startswith("path:"):
+                import subprocess as sp
+                return sp.CompletedProcess(args, 1, "", "worktree not found")
+            import subprocess as sp
+            if "task-create" in args:
+                return sp.CompletedProcess(args, 0, '{"ok":true,"result":{"id":"ot-1"}}', "")
+            if "run-current" in args:
+                return sp.CompletedProcess(args, 0, '{"ok":true,"result":{"runId":"run-1"}}', "")
+            if "repo" in args and "list" in args:
+                return sp.CompletedProcess(args, 0,
+                                           '{"ok":true,"result":{"repos":[{"id":"repo-1",'
+                                           '"path":"' + str(self.root) + '"}]}}', "")
+            return sp.CompletedProcess(args, 0,
+                                       '{"ok":true,"result":{"dispatchId":"d-9",'
+                                       '"workspace":"repo-1::/tmp/new-wt",'
+                                       '"branch":"foreman/T-001-impl"}}', "")
+
+        with patch.object(tr, "_run", side_effect=fake_run):
+            info = tr.launch("codex", "w-T-001-a2", "prompt", None, True, cfg,
+                             reuse_worktree="/tmp/gone-wt")
+        self.assertEqual(info["worktree"], "/tmp/new-wt")
+        self.assertEqual(info["stale_worktrees"], ["/tmp/gone-wt"],
+                         "降级新建必须把用不了的旧树记下来，供 merge/abandon 清理")
+        ws = [c for c in calls if "worker-start" in c]
+        self.assertEqual(len(ws), 2, "第一次 path: 失败后必须用 new-top-level 重试一次")
+        self.assertEqual(ws[0][ws[0].index("--worktree") + 1], "path:/tmp/gone-wt")
+        self.assertEqual(ws[1][ws[1].index("--worktree") + 1], "new-top-level")
+
+    def test_merge_same_branch_two_trees(self) -> None:
+        """Orca 重派复用树失败降级新建后：两个 dispatch 不同树、分支同名。
+
+        merge 时 cleanup 删最后一次的树与分支，stale 清理删前一棵树，
+        分支因同名不得再删（变异实验：去掉 keep_branch 判断会报"分支删除失败"）。
+        """
+        task = self.repo.load_task("T-001")
+        task["status"] = "failed"
+        self.repo.save_task(task)
+        wt2 = Path(tempfile.mkdtemp(prefix="orca-wt2-")) / "wt"
+        self.addCleanup(shutil.rmtree, wt2.parent, True)
+        run_git(self.root, "worktree", "add", str(wt2), "-b", "foreman/T-001-impl-x", "master")
+        os.environ["FAKE_ORCA_WT"] = str(wt2)
+        self.assertEqual(foreman.main(["dispatch", "T-001", "--repo", str(self.root),
+                                       "--retry-note", "缩 scope"]), 0)
+        task = self.repo.load_task("T-001")
+        d2 = task["dispatches"][-1]
+        self.assertEqual(d2["worktree"], str(wt2), "降级新建得到新树")
+        (wt2 / "src" / "feature.txt").write_text("done\n", encoding="utf-8")
+        self.commit_in(wt2, "feat: x")
+        self.set_event(f"[FOREMAN:DONE] task=T-001 dispatch={d2['id']}\n完成")
+        self.assertEqual(self.run_events(), 0)
+        self.assertEqual(foreman.main(["review", "T-001", "--repo", str(self.root)]), 0)
+        self.assertEqual(foreman.main(["merge", "T-001", "--repo", str(self.root)]), 0)
+        task = self.repo.load_task("T-001")
+        self.assertFalse(self.wt.exists(), "前一棵树（D-001）必须清掉")
+        stale = " ".join(task["cleanup"].get("stale_attempts") or [])
+        self.assertIn("树已删", stale)
+        # 分支与 keep_branch 同名（Orca 各 attempt 同分支名）：stale 只删树，不碰分支
+        self.assertNotIn("D-001 分支已删", stale, "同名分支已被 cleanup 删，stale 不得重复处理")
+        self.assertNotIn("删除失败", stale)
+
     def test_retry_reuses_previous_worktree(self) -> None:
         """重派复用上一 attempt 的托管树：Orca 默认每次新建，会让树增殖（-2/-3 后缀）。"""
         task = self.repo.load_task("T-001")
@@ -2130,6 +2198,69 @@ class TestAbandonCleansStaleAttempts(TempGitRepoMixin):
         self.assertIn("D-000 树已删", " ".join(task["cleanup"]["stale_attempts"]))
 
 
+    def test_abandon_blocked_keeps_shared_branch(self) -> None:
+        """hcom 模式所有 attempt 同一个分支名：清理只能删别的 dispatch 的分支，不能删在用的。"""
+        self.full_task()
+        self.dispatch()
+        task = self.repo.load_task("T-001")
+        task["status"] = "failed"
+        self.repo.save_task(task)
+        self.dispatch(["--retry-note", "缩 scope"])
+        task = self.repo.load_task("T-001")
+        task["status"] = "running"
+        task["attempts"] = 3
+        self.repo.save_task(task)
+        # abandon 在 attempts 用尽时置 blocked 并清理
+        rc = foreman.main(["task", "abandon", "T-001", "--repo", str(self.root), "--reason", "交人"])
+        self.assertEqual(rc, 0)
+        task = self.repo.load_task("T-001")
+        # blocked 语义 = 全清：cleanup 删最后一次 dispatch 的树与分支。
+        # stale 清理只处理别的 dispatch；hcom 模式所有 attempt 同树同分支，
+        # 必须按值跳过——否则会重复删或把已删的同名分支误判成 stale 再删一次。
+        stale = " ".join(task["cleanup"].get("stale_attempts") or [])
+        self.assertNotIn("分支删除失败", stale, "stale 不得重复操作 cleanup 已删的同名分支")
+        self.assertNotIn("树删除失败", stale)
+        self.assertNotIn("D-001 树已删", stale, "同树按值跳过，不该出现对 D-001 的删除记录")
+
+
+    def test_abandon_blocked_stale_cleans_residue(self) -> None:
+        """cleanup 删树失败时（树残留），stale 清理必须兜底把 D-001 的树删掉。
+
+        变异实验：去掉「同树路径跳过」后 D-001 也能被处理，但当时树已被 cleanup 删掉，
+        此测试专门覆盖树仍残留的情形。mock cleanup 让它不删 D-002 的树，
+        两条 dispatch 同树，D-001 的残留靠 stale 清理兜底。
+        """
+        self.full_task()
+        self.dispatch()
+        task = self.repo.load_task("T-001")
+        task["status"] = "failed"
+        self.repo.save_task(task)
+        self.dispatch(["--retry-note", "缩 scope"])
+        task = self.repo.load_task("T-001")
+        task["status"] = "running"
+        task["attempts"] = 3
+        self.repo.save_task(task)
+        # mock：cleanup 假装删失败（树残留）
+        orig = foreman.make_transport
+
+        def fake_transport(repo, cfg):
+            tr = orig(repo, cfg)
+            tr.cleanup = lambda repo_, d: {
+                "dispatch": d.get("id"), "worktree_removed": False, "branch_deleted": False,
+                "worker_released": None, "notes": ["rm 失败（模拟）"]}
+            return tr
+
+        with patch.object(foreman, "make_transport", fake_transport):
+            rc = foreman.main(["task", "abandon", "T-001", "--repo", str(self.root),
+                               "--reason", "交人"])
+        self.assertEqual(rc, 0)
+        wt = Path(self.repo.load_task("T-001")["dispatches"][-1]["worktree"])
+        self.assertFalse(wt.exists(), "cleanup 失败的树必须由 stale 清理兜底删掉")
+        task = self.repo.load_task("T-001")
+        self.assertIn("D-001 树已删", " ".join(task["cleanup"]["stale_attempts"]),
+                      "同树但 cleanup 没删成时，stale 要删")
+
+
 class TestMergeCleansStaleAttempts(TempGitRepoMixin):
     """任务完成时，被淘汰 attempt 的树与分支也要清：Orca 每个 attempt 一棵新树。
 
@@ -2164,6 +2295,33 @@ class TestMergeCleansStaleAttempts(TempGitRepoMixin):
         self.assertEqual(branches.strip(), "", "被淘汰 attempt 的分支也要删")
         task = self.repo.load_task("T-001")
         self.assertIn("D-000 树已删", " ".join(task["cleanup"]["stale_attempts"]))
+
+
+    def test_merge_hcom_same_branch_not_double_deleted(self) -> None:
+        """hcom 模式所有 attempt 同树同分支：merge 后 stale 清理不得删在用的分支。
+
+        变异实验发现：去掉 keep_branch 判断后此场景会把已合并的分支删掉（merge 已完成，
+        产物不坏，但分支凭空消失）。正确行为是按值跳过。
+        """
+        self.full_task()
+        self.dispatch()
+        task = self.repo.load_task("T-001")
+        task["status"] = "failed"
+        self.repo.save_task(task)
+        self.dispatch(["--retry-note", "缩 scope"])
+        wt = Path(self.repo.load_task("T-001")["dispatches"][-1]["worktree"])
+        (wt / "src" / "feature.txt").write_text("done\n", encoding="utf-8")
+        self.commit_in(wt, "feat: x")
+        self.set_event("[FOREMAN:DONE] task=T-001 dispatch=D-002\n完成")
+        self.assertEqual(self.run_events(), 0)
+        self.assertEqual(foreman.main(["review", "T-001", "--repo", str(self.root)]), 0)
+        self.assertEqual(foreman.main(["merge", "T-001", "--repo", str(self.root)]), 0)
+        branches = subprocess.run(["git", "branch", "--list", "foreman/T-001-实现-x"],
+                                  cwd=self.root, capture_output=True, text=True).stdout
+        # merge 自己会删合并的分支；关键是 stale 清理不得报错或重复删
+        task = self.repo.load_task("T-001")
+        stale = " ".join(task["cleanup"].get("stale_attempts") or [])
+        self.assertNotIn("删除失败", stale)
 
 
 class TestMergePostVerify(TempGitRepoMixin):
