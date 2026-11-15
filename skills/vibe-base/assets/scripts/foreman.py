@@ -549,10 +549,11 @@ class Transport:
         raise NotImplementedError
 
     def launch(self, agent: str, name: str, prompt: str, worktree: Path | None,
-               headless: bool, cfg: dict) -> dict:
+               headless: bool, cfg: dict, reuse_worktree: str | None = None) -> dict:
         """拉起 worker；返回合并进 dispatch 记录的信息（worker_handle/worktree/branch 等）。
 
-        worktree 为 None 时由 transport 自建（Orca 模式）；否则使用已建好的隔离树（hcom 模式）。"""
+        worktree 为 None 时由 transport 自建（Orca 模式）；否则使用已建好的隔离树（hcom 模式）。
+        reuse_worktree 是重派时复用的旧树路径（Orca 用 path: selector；hcom 忽略，树本来就复用）。"""
         raise NotImplementedError
 
     def wait_message(self, timeout: int) -> dict:
@@ -833,7 +834,7 @@ class Hcom(Transport):
             fail(f"hcom send 回执不是 JSON：{proc.stdout.strip()[:200]}")
 
     def launch(self, agent: str, name: str, prompt: str, worktree: Path | None,
-               headless: bool, cfg: dict) -> dict:
+               headless: bool, cfg: dict, reuse_worktree: str | None = None) -> dict:
         args = [
             self.bin, agent,
             "--name", name,
@@ -1055,7 +1056,7 @@ class Orca(Transport):
         return self._ok_json(proc, f"orchestration send → {target}")
 
     def launch(self, agent: str, name: str, prompt: str, worktree: Path | None,
-               headless: bool, cfg: dict) -> dict:
+               headless: bool, cfg: dict, reuse_worktree: str | None = None) -> dict:
         run_id = self.run_id()
         if not run_id:
             fail("Orca 模式需要先绑定编排 Run：orca orchestration run-create --objective \"<目标>\" --json")
@@ -1066,10 +1067,17 @@ class Orca(Transport):
         task_id = self._find_id(tdata)
         if not task_id:
             fail(f"task-create 回执中未找到任务 id：{json.dumps(tdata, ensure_ascii=False)[:300]}")
+        # 重派复用旧树：Orca 每个 attempt 默认建新树，会让 worktree 增殖（实测 -2/-3 后缀），
+        # 累计 diff 与 cherry-pick 也就断了。path: selector 指向上一 attempt 的树。
+        wt_arg = f"path:{reuse_worktree}" if reuse_worktree else "new-top-level"
         args = ["orchestration", "worker-start", "--task", task_id, "--agent", agent,
-                "--worktree", "new-top-level", "--repo", sel,
+                "--worktree", wt_arg, "--repo", sel,
                 "--base-branch", cfg["base"], "--name", name, "--json"]
         proc = self._run(*args, timeout=600)
+        if proc.returncode != 0 and reuse_worktree:
+            # 旧树已被清理或未注册：降级新建，不阻断重派
+            args[args.index(wt_arg)] = "new-top-level"
+            proc = self._run(*args, timeout=600)
         if proc.returncode != 0:
             detail = ((proc.stderr or "") + (proc.stdout or "")).strip()
             if "agent-hooks-review-prompt" in detail:
@@ -1854,6 +1862,11 @@ def cmd_task_new(args: argparse.Namespace) -> int:
         notes_out.append("注意：未定义验收命令，dispatch 前用 task set-acceptance 补上")
     if items:
         notes_out.append(f"{len(items)} 个子项逐项验收")
+    for acc in [*(a for a in (args.accept or [])), *([items_acceptance] if items_acceptance else [])]:
+        hint = shell_hint(acc)
+        if hint:
+            notes_out.append(f"验收命令含 shell 语法：{hint}")
+            break
     items_note = "；".join(notes_out)
     task = {
         "id": task_id,
@@ -1893,6 +1906,9 @@ def cmd_task_set_acceptance(args: argparse.Namespace) -> int:
     repo = Repo(Path(args.repo))
     assert_coordinator(repo, effective_config(repo))
     task = repo.load_task(args.task_id)
+    hint = shell_hint(args.accept)
+    if hint:
+        print(f"警告：{hint}")
     task["acceptance"] = args.accept
     task["items"] = []  # 单条命令替换掉子项清单，避免两份验收口径打架
     if task["status"] == "pending":
@@ -1948,6 +1964,11 @@ def cmd_task_abandon(args: argparse.Namespace) -> int:
         repo.save_task(task)  # 先落盘，清理失败不影响状态
         cleaned = make_transport(repo, cfg).cleanup(repo, dispatch)
         task["cleanup"] = dict(cleaned, at=now_iso())
+        # 前几次 attempt 的树同样没用了：只清最后一次就是泄漏（T-027 三次 attempt 留了两棵）
+        stale = remove_stale_attempts(repo, task, dispatch.get("id", ""),
+                                      keep_worktree=Path(dispatch.get("worktree") or ""))
+        if stale:
+            task["cleanup"]["stale_attempts"] = stale
         repo.log_task(task, "cleaned", "; ".join(cleaned.get("notes") or []) or "无清理动作")
     elif dispatch:
         repo.log_task(task, "cleanup-skipped",
@@ -2098,7 +2119,8 @@ def cmd_dispatch(args: argparse.Namespace) -> int:
     created_tree = False
     if cfg.get("transport") == "orca":
         # Orca 托管隔离：不手工建树，worker-start 自建托管 worktree
-        tree_note = f"{dispatch_id} 由 Orca 创建托管 worktree（base={cfg['base']}）"
+        tree_note = (f"{dispatch_id} 复用上一 attempt 的托管树 {prev.get('worktree')}" if is_retry and prev
+                     else f"{dispatch_id} 由 Orca 创建托管 worktree（base={cfg['base']}）")
     else:
         # 建树：base 上开分支 + worktree；重派（failed）时复用既有树，不重建，不改状态
         branch_exists = repo.git_try("rev-parse", "--verify", branch).returncode == 0
@@ -2120,7 +2142,9 @@ def cmd_dispatch(args: argparse.Namespace) -> int:
     try:
         info = transport.launch(agent, worker_handle, prompt,
                                 None if cfg.get("transport") == "orca" else wt,
-                                headless=bool(args.headless), cfg=cfg)
+                                headless=bool(args.headless), cfg=cfg,
+                                reuse_worktree=(str(prev.get("worktree")) if is_retry and prev
+                                                and prev.get("worktree") else None))
     except SystemExit:
         if created_tree:
             # 本次新建的空树无 worker 产出，失败即清理，避免 ready 态残留孤儿树
@@ -2550,6 +2574,31 @@ def run_acceptance_set(repo: Repo, task: dict, cwd: Path, label: str) -> list[di
     return results
 
 
+SHELL_META = re.compile(r"&&|\|\||[|;<>]")
+
+
+def shell_hint(cmd: str) -> str:
+    """验收命令不经 shell（run_cmd 一律参数列表调用）：裸写 && / | / 重定向会被当参数。
+
+    实测 T-027：`pytest -q && ruff check .` 里的 && 变成 pytest 的参数，验收静默失效。
+    要 shell 语义就显式包一层 `bash -lc '...'`，或拆成多个 --item。
+    """
+    try:
+        argv = shlex.split(cmd)
+    except ValueError:
+        return ""
+    if not argv:
+        return ""
+    head = Path(argv[0]).name
+    if head in {"bash", "sh", "zsh", "dash"} and any(
+            a.startswith("-") and "c" in a[1:] for a in argv[1:2]):
+        return ""
+    if SHELL_META.search(cmd):
+        return ("验收命令不经 shell，`&&` / `|` / 重定向会被当参数传给第一个命令；"
+                "要 shell 语义写成 bash -lc '<命令>'，或拆成多个 --item")
+    return ""
+
+
 def build_items(titles: list[str] | None, accepts: list[str] | None) -> tuple[list[dict], str | None]:
     """把 --item / --accept 按顺序配对成子项；单条验收命令保持老形态（items 为空）。"""
     ts = [t.strip() for t in (titles or []) if str(t).strip()]
@@ -2660,6 +2709,36 @@ def cmd_review(args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------- 命令：merge
 
 
+def remove_stale_attempts(repo: Repo, task: dict, keep_dispatch_id: str,
+                           keep_worktree: Path | None = None) -> list[str]:
+    """删掉被淘汰 attempt 的树与分支（任务完成或 blocked 后没有再用处）。
+
+    Orca 每个 attempt 建一棵新树，只清最后一次就是永久泄漏（实测 T-036 的 D-001/D-002）。
+    hcom 模式所有 attempt 共用一棵树，按路径相等跳过。失败只记结果，不抛。
+    """
+    notes: list[str] = []
+    for d in task.get("dispatches", []):
+        if d.get("id") == keep_dispatch_id:
+            continue
+        old_wt = str(d.get("worktree") or "")
+        old_branch = d.get("branch") or ""
+        if not old_wt or old_wt == "." or (keep_worktree and Path(old_wt) == keep_worktree):
+            continue
+        old_path = Path(old_wt)
+        if old_path.exists():
+            proc = repo.git_try("worktree", "remove", "--force", old_wt)
+            if proc.returncode != 0:
+                repo.git_try("worktree", "prune")
+                proc = repo.git_try("worktree", "remove", "--force", old_wt)
+            notes.append(f"{d['id']} 树已删" if proc.returncode == 0
+                         else f"{d['id']} 树删除失败（{(proc.stderr or '').strip()[:120]}）")
+        if old_branch and old_branch != (task.get("merge") or {}).get("branch"):
+            proc = repo.git_try("branch", "-D", old_branch)
+            notes.append(f"{d['id']} 分支已删" if proc.returncode == 0
+                         else f"{d['id']} 分支删除失败（{(proc.stderr or '').strip()[:120]}）")
+    return notes
+
+
 def cmd_merge(args: argparse.Namespace) -> int:
     repo = Repo(Path(args.repo))
     cfg = effective_config(repo)
@@ -2710,28 +2789,8 @@ def cmd_merge(args: argparse.Namespace) -> int:
     # 清理：删 worktree / 分支 / 结算 worker。失败只记结果，由 task["cleanup"] 与 doctor 暴露
     cleaned = make_transport(repo, cfg).cleanup(repo, dispatch)
     task["cleanup"] = dict(cleaned, at=now_iso())
-    # 被淘汰 attempt 的树：任务已完成，前几次的树没有再用处。Orca 每个 attempt 一棵新树，
-    # 只清最后一次就是永久泄漏（实测 T-036 的 D-001/D-002 两棵留在 ~/orca/workspaces）。
-    stale: list[str] = []
-    for d in task.get("dispatches", []):
-        if d.get("id") == dispatch.get("id"):
-            continue
-        old_wt = str(d.get("worktree") or "")
-        old_branch = d.get("branch") or ""
-        if not old_wt or old_wt == "." or Path(old_wt) == wt:
-            continue  # hcom 模式所有 attempt 共用一棵树
-        old_path = Path(old_wt)
-        if old_path.exists():
-            proc = repo.git_try("worktree", "remove", "--force", old_wt)
-            if proc.returncode != 0:
-                repo.git_try("worktree", "prune")
-                proc = repo.git_try("worktree", "remove", "--force", old_wt)
-            stale.append(f"{d['id']} 树已删" if proc.returncode == 0
-                         else f"{d['id']} 树删除失败（{(proc.stderr or '').strip()[:120]}）")
-        if old_branch and old_branch != branch:
-            proc = repo.git_try("branch", "-D", old_branch)
-            stale.append(f"{d['id']} 分支已删" if proc.returncode == 0
-                         else f"{d['id']} 分支删除失败（{(proc.stderr or '').strip()[:120]}）")
+    # 被淘汰 attempt 的树：任务已完成，前几次的树没有再用处
+    stale = remove_stale_attempts(repo, task, dispatch.get("id", ""), keep_worktree=wt)
     if stale:
         task["cleanup"]["stale_attempts"] = stale
     repo.log_task(task, "cleaned", "; ".join(cleaned.get("notes") or []) or "无清理动作")

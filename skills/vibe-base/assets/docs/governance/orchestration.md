@@ -58,6 +58,10 @@ python3 $F report T-001             # 竣工单 → docs/progress/（入库）
 
 拆不动的信号：验收命令写不出来（要什么还没想清，先回去问人类）、范围列不出路径（边界没定）、要跨仓库改（不在本仓编排范围内）。
 
+验收命令不经 shell：`run_cmd` 一律参数列表调用，裸写 `&&` / `|` / 重定向会被当参数传给第一个命令（实测
+`pytest -q && ruff check .` 里的 `&&` 成了 pytest 的参数，验收静默失效）。要 shell 语义就显式写
+`bash -lc '<命令>'`，或拆成多个 `--item`。`task new` 与 `task set-acceptance` 遇到裸 shell 语法会警告。
+
 ### 批次：一串依赖项当一个任务
 
 意图和规格拆完，常得到一串有顺序的子项。逐个派工意味着每个子项一轮 `review` + `merge`，主管被这一串锁住；而这条链本来就跑不成并行，拆开派并不换来并行度。把整条链当一个任务派出去，worker 在同一棵树里逐项做完，主管只在整批结束时审一次。
@@ -128,6 +132,12 @@ python3 scripts/foreman.py task new --repo . --title "EP1 三处修" \
 
 重派前会自动结算上一 attempt 的 worker（`worker-stop` + `worker-release`，只停人不删树：累计 diff 与
 cherry-pick 还要用）。不结算是僵尸会话：旧 worker 占着树，还可能发混淆的协议消息。
+
+重派复用同一棵树：hcom 模式本来就复用；Orca 模式用 `--worktree path:<旧树>` 指向上一 attempt 的托管树
+（旧树不可用时降级新建，不阻断重派）。不复用会让 worktree 按 attempt 增殖，累计 diff 也断了。
+
+任务完成或 blocked 后，被淘汰 attempt 的树与分支由 `merge` / `task abandon` 一并清掉，结果记在
+`task["cleanup"]["stale_attempts"]`。
 
 ### 不派工的场合
 

@@ -62,3 +62,24 @@ worker 名字带 attempt 是补充：hcom 模式下 `w-{task_id}` 每次重派�
 清理前确认过树是干净的，SHA 留在会话记录里。
 
 测试 181 → 182。
+
+## 追记 2026-11-15（对照问题清单补两处遗漏）
+
+对照 storyboard 的完整问题清单复查，发现两处没回流：
+
+1. **验收命令不经 shell**（问题 1 的另一半）。`run_acceptance` 用 `shlex.split` + 参数列表调用，
+   裸写 `pytest -q && ruff check .` 时 `&&` 成了 pytest 的参数，验收静默失效（T-027）。storyboard 的
+   做法是在命令里显式包 `bash -lc` 并做环境自举；技能版补的是机械提示：`shell_hint()` 检测裸
+   shell 元字符（排除已包 `bash -lc` 的），`task new` 与 `task set-acceptance` 警告，文档写明正确写法。
+   不做 shell=True：那会把验收命令变成任意脚本执行面，且不同 shell 语义不一致。
+
+2. **abandon 只清最后一次 attempt 的树**（问题 3 的另一半）。`merge` 已补 stale 清理，但 `blocked` 后
+   `abandon` 走的是另一条路径，只清最后一次 dispatch。T-027 三次 attempt 进 blocked 就留了两棵树。
+   修法是把清理抽成 `remove_stale_attempts()`，`merge` 与 `abandon` 共用。
+
+3. **同树重派对齐**（清单里标为最后一项未实施）。`orchestration.md` 写「重派复用同一棵树」，但 Orca
+   每次 `worker-start --worktree new-top-level` 都建新树，`-2/-3` 后缀就是这么来的。改成重派时传
+   `--worktree path:<上一 attempt 的树>`（Orca 原生 selector），失败降级新建不阻断。`Transport.launch`
+   加 `reuse_worktree` 参数，hcom 忽略（它本来就复用）。
+
+测试 182 → 186（shell 提示 2 条、abandon stale 1 条、Orca 重派复用树 1 条）。

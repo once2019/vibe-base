@@ -852,6 +852,21 @@ class TestOrcaTransport(TempGitRepoMixin):
         self.assertEqual(ws[ws.index("--agent") + 1], "codex")
         self.assertNotIn("--dir", ws)  # 不建手工 worktree
 
+    def test_retry_reuses_previous_worktree(self) -> None:
+        """重派复用上一 attempt 的托管树：Orca 默认每次新建，会让树增殖（-2/-3 后缀）。"""
+        task = self.repo.load_task("T-001")
+        task["status"] = "failed"
+        self.repo.save_task(task)
+        before = len(self.orca_calls())
+        self.assertEqual(foreman.main(["dispatch", "T-001", "--repo", str(self.root),
+                                       "--retry-note", "缩 scope 到 src/"]), 0)
+        calls = self.orca_calls()[before:]
+        ws = next(c for c in calls if "worker-start" in c)
+        self.assertEqual(ws[ws.index("--worktree") + 1], f"path:{self.wt}",
+                         "重派必须指向旧树，否则 worktree 增殖且累计 diff 断掉")
+        task = self.repo.load_task("T-001")
+        self.assertEqual(task["dispatches"][-1]["attempt"], 2)
+
     def test_ask_native_gate_and_reply_resolves(self) -> None:
         self.set_event("[FOREMAN:ASK] task=T-001 dispatch=D-001\n用哪个库？")
         self.assertEqual(self.run_events(), 0)
@@ -2066,6 +2081,53 @@ class TestDefaultForemanName(unittest.TestCase):
             na = foreman.Repo(Path(a)).load_or_default_config()["foreman_name"]
             nb = foreman.Repo(Path(b)).load_or_default_config()["foreman_name"]
             self.assertNotEqual(na, nb)
+
+
+class TestAcceptanceShellHint(TempGitRepoMixin):
+    """验收命令不经 shell：裸 && 会被当参数（实测 T-027 静默失效）。"""
+
+    def test_shell_hint_flags_bare_operators(self) -> None:
+        self.assertIn("bash -lc", foreman.shell_hint("pytest -q && ruff check ."))
+        self.assertIn("bash -lc", foreman.shell_hint("pytest -q | tee out.log"))
+        self.assertEqual(foreman.shell_hint("pytest -q"), "")
+        self.assertEqual(foreman.shell_hint("bash -lc 'pytest -q && ruff check .'"), "",
+                         "显式 bash -lc 是正确写法，不该再提示")
+        self.assertEqual(foreman.shell_hint("python3 scripts/x.py --a=b"), "")
+
+    def test_set_acceptance_warns_on_bare_and(self) -> None:
+        self.full_task()
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            rc = foreman.main(["task", "set-acceptance", "T-001", "--repo", str(self.root),
+                               "--accept", "pytest -q && ruff check ."])
+        self.assertEqual(rc, 0, "提示不阻断（命令仍可用，只是会按字面执行）")
+        self.assertIn("不经 shell", out.getvalue())
+
+
+class TestAbandonCleansStaleAttempts(TempGitRepoMixin):
+    """blocked 后 abandon：前几次 attempt 的树同样没用了（T-027 三次 attempt 留了两棵）。"""
+
+    def test_abandon_blocked_removes_stale_trees(self) -> None:
+        self.full_task()
+        self.dispatch()
+        task = self.repo.load_task("T-001")
+        stale_wt = Path(tempfile.mkdtemp(prefix="foreman-stale-")) / "wt"
+        self.addCleanup(shutil.rmtree, stale_wt.parent, True)
+        run_git(self.root, "worktree", "add", "-q", str(stale_wt), "-b", "foreman/T-001-old")
+        task["dispatches"].insert(0, {
+            "id": "D-000", "attempt": 1, "at": "2026-01-01T00:00:00Z",
+            "worktree": str(stale_wt), "branch": "foreman/T-001-old",
+            "worker_handle": "dispatch:ctx_old", "agent": "codex",
+        })
+        task["attempts"] = 3  # 阶梯用尽：abandon 会进 blocked 并清理
+        self.repo.save_task(task)
+        rc = foreman.main(["task", "abandon", "T-001", "--repo", str(self.root),
+                           "--reason", "worker 不可恢复"])
+        self.assertEqual(rc, 0)
+        self.assertFalse(stale_wt.exists(), "blocked 任务的前几次树必须一起清")
+        task = self.repo.load_task("T-001")
+        self.assertEqual(task["status"], "blocked")
+        self.assertIn("D-000 树已删", " ".join(task["cleanup"]["stale_attempts"]))
 
 
 class TestMergeCleansStaleAttempts(TempGitRepoMixin):
