@@ -47,7 +47,7 @@ mkdir -p ~/.codex/skills
 cp -r skills/vibe-base ~/.codex/skills/
 ```
 
-无第三方依赖（Python 3.9+ 标准库：控制面用了 `Path.is_relative_to`，脚手架用了内置泛型注解）。回归测试不在技能包内，由维护本技能的仓库运行（仓库根 `tests/`，`python3 -m unittest discover -s tests`）。
+无第三方依赖（Python 3.9+ 标准库：控制面用了 `Path.is_relative_to`，脚手架用了内置泛型注解）。回归测试不在技能包内，由维护本技能的仓库运行（仓库根 `tests/`，`python3 -m unittest discover -s tests`，含一条 mypy 门禁——mypy 属 --user 安装的系统级依赖，未装自动跳过该条）。
 
 ## 红线
 
