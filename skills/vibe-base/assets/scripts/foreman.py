@@ -1584,12 +1584,31 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
     return EXIT_ERROR if fails else EXIT_OK
 
 
+QUALITY_TOOLS = ("crapper", "dryer", "mutator")
+
+
+def quality_tools_status(home: Path | None = None) -> list[dict]:
+    """可选质量门槛工具的安装状态。装在机器级 ~/tools/<name>/<name>，或 PATH 里。
+
+    它们不是项目依赖（属 AGENTS.md §4 的系统级依赖），缺了只 warn：按人工判据走。
+    """
+    base = home if home is not None else Path.home()
+    out = []
+    for name in QUALITY_TOOLS:
+        local = base / "tools" / name / name
+        found = local.exists() or shutil.which(name) is not None
+        out.append({"name": name, "found": found, "path": str(local)})
+    return out
+
+
 def cmd_doctor(args: argparse.Namespace) -> int:
     repo = Repo(Path(args.repo))
     checks: list[dict] = []
 
-    def check(name: str, ok: bool, detail: str, fix: str) -> None:
-        checks.append({"name": name, "ok": ok, "detail": detail, "fix": fix})
+    def check(name: str, ok: bool, detail: str, fix: str, level: str | None = None) -> None:
+        # level 三态：ok / warn / fail。warn 不进返回码（可选门槛缺失不该挡初始化）。
+        checks.append({"name": name, "ok": ok, "detail": detail, "fix": fix,
+                       "level": level or ("ok" if ok else "fail")})
 
     git_ok = shutil.which("git") is not None
     check("git", git_ok, "PATH 中未找到 git" if not git_ok else "git 可用",
@@ -1649,6 +1668,18 @@ def cmd_doctor(args: argparse.Namespace) -> int:
                             - {"README.md", "_template.md"})
             due = "，考虑跑一次复盘（governance-review.md）" if decisions >= 20 else ""
             check("governance-budget", True, f"{detail}；决策 {decisions} 条{due}", "")
+    # 可选质量门槛：缺失只 warn（工具属系统级依赖，不装也能按人工判据走）
+    tools = quality_tools_status()
+    missing = [t["name"] for t in tools if not t["found"]]
+    if missing:
+        check("quality-tools", True,
+              f"未装 {' / '.join(missing)}（可选门槛，缺了按人工判据检查）",
+              f"可选：git clone https://github.com/unclebob/{missing[0]} ~/tools/{missing[0]}，"
+              "首次运行自建 venv；命令与阈值见 docs/governance/coding-discipline.md",
+              level="warn")
+    else:
+        check("quality-tools", True, "crapper / dryer / mutator 可用", "")
+
     # 资源泄漏：completed 是终态，没人会回头看，只能靠体检
     leaks = resource_leaks(repo)
     if leaks:
@@ -1688,13 +1719,17 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             check("decisions-index", True,
                   f"{rep['entries']} 条索引 / {rep['files']} 份文件，双向一致", "")
 
-    ok = all(c["ok"] for c in checks)
+    levels = [c.get("level") or ("ok" if c["ok"] else "fail") for c in checks]
+    ok = "fail" not in levels
+    marks = {"ok": "OK ", "warn": "WARN", "fail": "FAIL"}
     emit(args, {"ok": ok, "transport": transport_name, "transport_source": transport_source,
                 "checks": checks},
           f"transport：{transport_name}（{transport_source}）\n"
-          + "\n".join(f"[{'OK ' if c['ok'] else 'FAIL'}] {c['name']}: {c['detail']}"
-                      + (f"（{c['fix']}）" if c["fix"] else "") for c in checks)
-          + f"\n结果：{'就绪' if ok else '存在问题，按提示处理后重试'}")
+          + "\n".join(f"[{marks.get(level, 'FAIL')}] {c['name']}: {c['detail']}"
+                       + (f"（{c['fix']}）" if c["fix"] else "")
+                       for c, level in zip(checks, levels))
+          + f"\n结果：{'就绪' if ok else '存在问题，按提示处理后重试'}"
+          + (f"（{levels.count('warn')} 条提示）" if "warn" in levels else ""))
     return EXIT_OK if ok else EXIT_ERROR
 
 

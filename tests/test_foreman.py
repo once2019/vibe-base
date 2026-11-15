@@ -1058,6 +1058,39 @@ class TestDoctor(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             self.assertEqual(foreman.main(["doctor", "--repo", td, "--json"]), 1)
 
+    def test_quality_tools_status_reads_machine_path(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td)
+            (home / "tools" / "crapper").mkdir(parents=True)
+            (home / "tools" / "crapper" / "crapper").write_text("#!/bin/sh\n")
+            with patch.object(foreman.shutil, "which", return_value=None):
+                st = {x["name"]: x["found"] for x in foreman.quality_tools_status(home=home)}
+        self.assertTrue(st["crapper"], "~/tools/<name>/<name> 存在即视为已装")
+        self.assertFalse(st["dryer"])
+        self.assertFalse(st["mutator"])
+
+    def test_doctor_quality_tools_missing_is_warn_not_fail(self) -> None:
+        """可选工具缺失只提示：level=warn、ok 保持 True，不把体检判成失败。"""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            run_git(root, "init", "-q")
+            foreman.write_json(root / ".vibe" / "config.json",
+                               {"foreman_name": "foreman", "tag": "foreman", "default_agent": "codex",
+                                "base": "main", "max_attempts": 3, "require_human_review": False,
+                                "hcom_bin": "definitely-not-on-path-xyz"})
+            missing = [{"name": n, "found": False, "path": ""} for n in foreman.QUALITY_TOOLS]
+            with patch.object(foreman, "quality_tools_status", return_value=missing):
+                out = io.StringIO()
+                with contextlib.redirect_stdout(out):
+                    foreman.main(["doctor", "--repo", str(root), "--json"])
+            data = json.loads(out.getvalue())
+        entry = [c for c in data["checks"] if c["name"] == "quality-tools"]
+        self.assertEqual(len(entry), 1, "doctor 里必须有这条检查")
+        self.assertEqual(entry[0]["level"], "warn")
+        self.assertTrue(entry[0]["ok"], "warn 不是 fail")
+        self.assertIn("crapper", entry[0]["detail"])
+        self.assertIn("unclebob/crapper", entry[0]["fix"])
+
     def test_doctor_reports_missing_hcom(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

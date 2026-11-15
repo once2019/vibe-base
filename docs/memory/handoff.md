@@ -16,7 +16,7 @@
 ## 当前状态（历史见 docs/progress/ 与 docs/decisions/）
 
 - 技能包 `skills/vibe-base` 1.1.0：骨架 17 文件（AGENTS.md + 15 docs + `scripts/foreman.py`），回归 173 项
-- 控制面：doctor 17 项（含 `decisions-index`、`orchestration-reconcile`、`resource-leaks`）
+- 控制面：doctor 18 项（含 `decisions-index`、`orchestration-reconcile`、`resource-leaks`、`quality-tools`）
 - 编码纪律细则 `docs/governance/coding-discipline.md`：六条判据 + 三段顺序 + 可选质量门槛
 - 未完成清单：空
 

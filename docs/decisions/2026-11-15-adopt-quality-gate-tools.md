@@ -40,3 +40,11 @@
 - 涉及文件：`docs/governance/coding-discipline.md`「可选质量门槛」（改写为命令表与阈值说明）、`scripts/foreman.py` 的 `BUILD_NOISE` 增 `.metrics/`、storyboard-maker `.gitignore` 增 `.metrics/`
 - 兼容性影响：不装工具的项目按人工判据执行，条文不失效；`init` 新增的忽略项对老仓库要重跑一次 `init` 才生效
 - 后续约束：工具是机器级路径 `~/tools/<name>/<name>`，项目文档里不写死项目内路径；升级工具时删掉其 `.venv` 重建，venv 不能整体移动（shebang 与 editable 链接是绝对路径）
+
+## 追记 2026-11-15（doctor 检查）
+
+工具装了但没人知道有没有装，等于没装。`doctor` 新增 `quality-tools` 一项：查 `~/tools/<name>/<name>` 或 PATH，缺了报 WARN 并在 fix 里给克隆命令。
+
+为此 doctor 的 `check()` 引入第三态 `level`（ok / warn / fail），返回码只看 fail。原先只有 ok/fail 两态，可选门槛缺失会把体检判成失败，所有项目的 doctor 都会红。
+
+项数 17 → 18，测试 173 → 175。
