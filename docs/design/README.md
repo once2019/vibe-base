@@ -14,4 +14,3 @@
 一行一份：`文件名｜一句话职责`，新建即登记，更新前先查（规则见 AGENTS.md §6 权威文档唯一）。
 
 - governance-retrospective.md｜治理复盘证据链（8 反模式实测证据；运行期清单正本见 governance-review.md）
-- 2026-11-13-vibe-base-introduction.md｜vibe-base 体系介绍：问题来源、机制映射、设计原理与适用边界
