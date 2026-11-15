@@ -1,0 +1,1 @@
+../../skills/vibe-base/assets/docs/governance/coding-discipline.md

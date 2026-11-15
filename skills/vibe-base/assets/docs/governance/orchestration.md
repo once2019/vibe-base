@@ -118,6 +118,8 @@ python3 scripts/foreman.py task new --repo . --title "EP1 三处修" \
 
 三次用完仍失败，任务进 `blocked`。这时该问的是"任务是不是拆大了"，而不是"再派一次会不会好"。
 
+同一道门连续失败两次时，先按 `coding-discipline.md`「两次失败后攻击前提」把被推翻的前提写成一句话，写进 blocked 的交接说明；没写出来之前不派第三次。
+
 ### 不派工的场合
 
 见 `orchestration-doctrine.md`。一句话：改一行文案、需求还没想清、需要全程做品味判断、跨仓库改动，直接做更快。

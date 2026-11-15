@@ -152,7 +152,7 @@ mkdir -p ~/.agent/skills
 cp -r skills/vibe-base ~/.agent/skills/
 ```
 
-装好之后，新项目里说一句「初始化项目治理」或「init AGENTS」。产出 16 个文件（1 份 `AGENTS.md`、14 份 docs、1 个 `scripts/foreman.py`），外加空的 `.vibe/` 骨架和忽略规则。幂等，不覆盖已有文件；占位符不追问，agent 在后续开发中自己回填。初始化之后技能可以删掉。
+装好之后，新项目里说一句「初始化项目治理」或「init AGENTS」。产出 17 个文件（1 份 `AGENTS.md`、15 份 docs、1 个 `scripts/foreman.py`），外加空的 `.vibe/` 骨架和忽略规则。幂等，不覆盖已有文件；占位符不追问，agent 在后续开发中自己回填。初始化之后技能可以删掉。
 
 `init` 之后先做三件事：填掉 `AGENTS.md` 里测试、lint、类型检查三条命令，给第一个任务写一条真能跑的验收命令，跑一次 `doctor` 修红项。记忆和决策库随开发长起来，编排在第一次真要并行时再启用。
 

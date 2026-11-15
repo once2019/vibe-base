@@ -19,3 +19,4 @@
 - 2026-11-13｜技能库｜[escalation 落进状态机：用 Orca 的 taskId/dispatchId 认领任务](2026-11-13-escalation-into-state-machine.md)｜已生效｜通道给的"worker 结束回合未上报"不再只记日志；已 waiting_answer 的任务不降级；prompt 补 --dispatch-id
 - 2026-11-13｜技能库｜[对账：拿通道的权威事实补消息驱动的盲区](2026-11-13-reconcile-against-orca-state.md)｜已生效｜新增 reconcile 与 doctor 的 orchestration-reconcile：dispatch 状态 / liveness / 消息落地三条账；inbox 必须 --full 才有 run_id
 - 2026-11-13｜技能库｜[合并/放弃后的资源回收：先落盘再清理，结果结构化](2026-11-13-resource-cleanup-on-merge-and-abandon.md)｜已生效｜cleanup 契约改成不抛 + 结构化；merge 先落盘状态；abandon 只在不重派时清理；doctor 新增 resource-leaks
+- 2026-11-15｜技能库｜[吸收 ub-mode 的编码纪律](2026-11-15-adopt-ub-mode-coding-discipline.md)｜已生效｜六条 §3 未覆盖的判据落进 docs/governance/coding-discipline.md，§3 只留一行指针；质量门槛工具属 Ask-first，不默认启用；push 策略保留本仓口径
