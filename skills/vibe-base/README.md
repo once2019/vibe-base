@@ -84,43 +84,41 @@
 
 ### 第一层：规范从哪来
 
-1. 理念来自 Karpathy 的三套公开写作。Guidelines 管 Agent 写代码的常见病，落到 `AGENTS.md` §3 那几条。LLM Wiki 管知识积累，调研结论、方案比较、根因分析写进 `docs/design/`，被否决的方案写进 `docs/decisions/`，下次直接查。受控文字管沟通，同一个概念只许一个名字，"尽快处理"必须换成具体日期。三套背后有共同的元设计：规则必须来自实测失败模式，每条配一个能自查的问句，每条要承认自己的代价。
+1. 三套理念都来自 Karpathy 的公开写作，各管一件事。Guidelines 治 agent 写代码的常见病，落到 `AGENTS.md` §3。LLM Wiki 治知识积累，调研结论写进 `docs/design/`，被否决的方案写进 `docs/decisions/`。受控文字治沟通，一个概念只许一个名字，"尽快处理"要换成具体日期。三条共同的底线：规则从实测失败里来，每条配一个能自查的问句，每条承认自己的代价。
 
-2. 可判定优先。一条规则能不能被机器或评审检验，决定它算不算规则。"注意代码质量"不是规则，"提交前 ruff、mypy、pytest 全部通过并贴出本次输出"是规则。代价是有些本该模糊的判断被压成机械判据，偶尔误报，处理办法是给误报留显式出口。
+2. 一条规则要能被检验才算规则。"注意代码质量"没法检验，"提交前 ruff、mypy、pytest 全过并贴出本次输出"可以。代价是模糊判断被压成机械判据，偶尔误报，所以给误报留了显式出口。
 
 ### 第二层：编排从哪来
 
-3. 主管 / worker 的形态是监督树（supervision tree）。Erlang/OTP 里 supervisor 只做三件事：启动 child、收 child 的退出信号、按策略决定重启还是放弃。主管对应 supervisor，worker 对应 child，差别在于 worker 的退出信号要靠消息通道送出来，通道不可靠时就得补探测，`reconcile` 干的就是这件事。三次上限是重启强度限制：超过就升级给人，不再自动重启。
+3. 主管 / worker 照的是 Erlang 的监督树。supervisor 只做三件事：拉起 worker、收它的退出信号、决定重启还是放弃。这里的差别是退出信号要靠消息送出来，通道不可靠就得自己探测，`reconcile` 就是那个探测。三次上限对应重启强度，超了交人。
 
-4. 生成与验证分离来自职责分离（separation of duties）和四眼原则。内控里同一人不能既执行又审批，软件工程里对应 code review。放到 agent 上还多一层实证理由：模型评自己的输出会偏向自己，LLM-as-judge 研究里叫自我偏好（self-preference）。所以 worker 自审只是初筛，主管必须独立复核，`review` 的六项检查是复核的固定口径。
+4. 写的人和验的人分开。内控里同一个人不能既执行又审批，软件里就是 code review。agent 还多一条理由：模型评自己的输出会偏心。所以 worker 自审只是初筛，主管必须独立复核，`review` 六项是固定口径。
 
-5. worktree 隔离对应数据库的隔离级别和"隔离实施、串行合并"。并行写同一个工作区，失败模式是任意时刻互相覆盖，冲突点不可预测。给每个任务一棵独立的树，并发写就降级成合并点上的串行比较：冲突只在 `merge` 时出现，且以 diff 形式可见。这与 CI 给每个变更起独立构建环境同源，代价是多一份磁盘和一次合并。
+5. 每个任务一棵独立的 worktree。并行写同一个目录，失败模式是任意时刻互相覆盖，冲突点不可预测；分开之后冲突只在 `merge` 时出现，以 diff 摆出来。CI 给每个变更起独立构建环境是同一个思路，代价是多一份磁盘和一次合并。
 
-6. 消息通道对应 actor 模型的消息传递。actor 之间不共享内存，只发消息，好处是解耦，代价是投递语义不确定：消息会丢、会重复、会被第三方读走。所以状态不能靠消息推导，`task.json` 才是事实源，消息只负责唤醒和携带证据指针。至少一次投递配上幂等写入，重复消费才不会写坏状态。
+6. 消息通道借的是 actor 模型的做法：彼此不共享内存，只发消息。好处是解耦，代价是投递不可靠，消息会丢、会重复、会被别人读走。所以状态不能从消息推导，`task.json` 才是事实源，消息只负责唤醒。同一份状态写两遍和写一遍结果相同，重复消费才写不坏。
 
-7. 回合制对应事件驱动替代轮询。轮询实现简单，代价是空转和延迟；事件驱动省掉空转，代价是需要一条可靠通道。会话不能常驻等待，所以派工后结束回合，消息到了再唤醒。两轮空等的上限挡住的是"没有消息"被当成"还在跑"。
+7. 回合制是事件驱动替掉轮询。轮询简单但空转，事件驱动省空转但要可靠通道。会话不能常驻等待，所以派工后结束回合，消息到了再唤醒。两轮空等的上限，挡的是把"没消息"当成"还在跑"。
 
-8. 验收先于实现来自 ATDD 与可执行规格。验收写成能跑的命令，需求模糊时这条命令就写不出来，模糊在这一步暴露，而不是在合并时暴露。`task new` 强制 `--accept`，把完成的定义从形容词变成可执行文件。
+8. 先写验收再动手。验收写成能跑的命令，需求模糊时这条命令写不出来，模糊在派工前就暴露。`task new` 强制 `--accept` 就是这个作用。
 
-9. 谁能干谁干对应比较优势与模型路由。判断设计取舍的活交给强模型，机械替换交给便宜快的，因为前者的差别在于判断质量，后者只在于速度和单价。批次任务同源：一串顺序依赖的子项共用一次派工和一次审查，固定开销被摊薄。
+9. 判断的活给强模型，搬砖的活给便宜的。改文案、批量重命名、补测试，模型强弱差别不大，占的是同一份注意力。批次任务同理：一串有顺序的子项共用一次派工和一次审查，派工与审查的固定开销只付一次。
 
 ### 编排依赖什么
 
-依赖四样，都是现成的：git（隔离树靠 `git worktree`）、一个编排通道 CLI（hcom 或 Orca，二选一）、一个能被拉起的 agent CLI、Python 3 标准库。没有数据库、消息队列或常驻服务，`.vibe/` 就是几个 JSON 和 Markdown 文件。通道属于 AGENTS.md §4 的"安装系统级依赖"，`init` 只打印命令，不替你装。
+编排要四样现成的东西：git（`git worktree` 建隔离树）、一个通道 CLI（hcom 或 Orca）、一个能拉起的 agent CLI、Python 3 标准库。没有数据库、消息队列或常驻服务，`.vibe/` 就是几个 JSON 和 Markdown。通道属 AGENTS.md §4 的系统级依赖，`init` 只打印命令。
 
-两个通道实现同一套接口（发消息、拉起 worker、等消息、清资源），形态差得很远。
+hcom 按实例名寻址：worker 叫 `<tag>-*`，主管用 `hcom send @名字` 发指令，`hcom events --wait --mention` 等回信，`hcom list --json` 看未读数。隔离树由 foreman 自己 `git worktree add` 建好再交给 worker。名字在机器级唯一，同机两个仓用默认名会互相取走回执，所以 init 时默认名带路径短哈希，`hcom kill tag:<tag>` 只影响本仓。
 
-hcom 管的是机器上的 agent 实例，按名字寻址。worker 拿到 `<tag>-*` 这样的名字，主管用 `hcom send @名字` 发指令，`hcom events --wait --mention` 等回信，`hcom list --json` 看未读数。隔离树由 foreman 自己 `git worktree add` 建好，再把目录交给 worker。名字在机器级唯一，同机两个仓都用默认名会互相取走回执，所以 init 时默认名带路径短哈希，tag 跟着一起带，`hcom kill tag:<tag>` 只影响本仓。
+Orca 是带状态的原生编排，分 Run、task、dispatch 三层，worker 挂在终端上，按 `run_id` 加 `dispatch:<id>` 寻址。隔离树由它建（`worker-start --worktree new-top-level`）。`worker-list` 分两栏：state 是 ready、succeeded、failed，liveness 是 live、exited，合起来才判断得出 worker 在跑、已退出没上报，还是正常结束。`worker_done` 要带 taskId 与 dispatchId 才收。它比 hcom 多三样：权威的 dispatch 状态、inbox 已读标记、worker 没上报就结束回合时主动发的 escalation。代价是主管会话必须在 Orca 管辖的终端里启动（`ORCA_TERMINAL_HANDLE` 由它注入）。
 
-Orca 是带状态的原生编排，分 Run、task、dispatch 三层，worker 挂在终端上，寻址用 `run_id` 加 `dispatch:<id>`。隔离树由 Orca 建（`worker-start --worktree new-top-level`），`worker-list` 分两栏给：state 是 ready、succeeded、failed，liveness 是 live、exited，两栏合起来才判断得出 worker 是还在跑、已退出没上报，还是正常结束。`worker_done` 要带 taskId 与 dispatchId 才收。它有 hcom 没有的三样：权威的 dispatch 状态、inbox 的已读标记、worker 没上报就结束回合时主动发的 escalation。代价是重，主管会话必须在 Orca 管辖的终端里启动（`ORCA_TERMINAL_HANDLE` 由 Orca 注入），否则发不出也收不到。
-
-缺省自动判定：有 `ORCA_TERMINAL_HANDLE`、daemon 复核终端还活着、且本终端不是某个 live dispatch 的终端，就走 Orca，否则 hcom。`init --transport hcom|orca` 可以钉死。两种模式下 `task.json` 都是事实源，通道只是事件层。差别落在对账上：Orca 的 dispatch 状态和 inbox 已读标记能当权威事实，hcom 派工没有可比对的权威源，`reconcile` 对它们不出结论。
+缺省自动判定：有 `ORCA_TERMINAL_HANDLE`、daemon 复核终端还活着、且本终端不是某个 live dispatch 的终端，就走 Orca，否则 hcom。`init --transport hcom|orca` 可以钉死。两种模式下 `task.json` 都是事实源，差别落在对账：Orca 的 dispatch 状态和已读标记能当权威事实，hcom 派工没有权威源，`reconcile` 对它们不出结论。
 
 ### 两条通用取向
 
-10. 机制自己也会坏。`reconcile` 拿通道的权威事实对三条账：通道说完成而状态机还在跑、worker 已退出但没上报、消息被读走却没有对应证据。合并后的清理先落盘状态再执行，失败只记结果，`doctor` 的 `resource-leaks` 报残留。这些护栏不解决工程问题，只保证解决工程问题的机制不先坏掉。
+10. 机制自己也会坏。`reconcile` 拿通道的权威事实对三条账：通道说完成而状态机还在跑、worker 已退出但没上报、消息被读走却没有对应证据。合并后的清理先落盘状态再执行，失败只记结果，`doctor` 的 `resource-leaks` 报残留。这些护栏不解决工程问题，只保证机制不先坏掉。
 
-11. 整套体系偏向正确而不是速度。证据门槛会否决一部分"感觉对"的改进，细则加载和自查拖慢写作节奏，常驻部分占用不到一百行上下文。
+11. 整套体系偏向正确而不是速度。证据门槛会否决一部分"感觉对"的改进，细则加载和自查拖慢节奏，常驻部分占用不到一百行上下文。
 
 | 选择                       | 换来            | 代价                           |
 | ------------------------ | ------------- | ---------------------------- |
