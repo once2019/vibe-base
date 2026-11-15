@@ -32,6 +32,7 @@ python3 $F review T-001             # DONE → 审 diff + 跑验收 + 存证据
 python3 $F merge T-001              # --no-ff 合并 + 复跑验收 + 删树 + 归档
 python3 $F report T-001             # 竣工单 → docs/progress/（入库）
 # merge 内含资源回收：worktree / 分支 / worker / orchestration task
+# merge 不 push：合并后是否推远端由人决定，未评审的合并不直接推出去
 # 回收失败不影响 completed（状态先落盘），结果写 task["cleanup"]，doctor 的 resource-leaks 会报
 ```
 
@@ -118,7 +119,7 @@ python3 scripts/foreman.py task new --repo . --title "EP1 三处修" \
 
 三次用完仍失败，任务进 `blocked`。这时该问的是"任务是不是拆大了"，而不是"再派一次会不会好"。
 
-同一道门连续失败两次时，先按 `coding-discipline.md`「两次失败后攻击前提」把被推翻的前提写成一句话，写进 blocked 的交接说明；没写出来之前不派第三次。
+同一道门连续失败两次时，先按 `coding-discipline.md`「两次失败后攻击前提」把被推翻的前提写成一句话，写进第三次的 `--retry-note`；写不出前提就转 `blocked`，不再派。
 
 ### 不派工的场合
 
