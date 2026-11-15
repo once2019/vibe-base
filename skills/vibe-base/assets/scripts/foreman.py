@@ -37,7 +37,7 @@ HEADER_RE = re.compile(r"^\[FOREMAN:([A-Z_]+)\]\s+task=(\S+)\s+dispatch=(\S+)", 
 LOG_MAX_BYTES = 1_000_000  # 追加型日志超过 1MB 轮转一份 .1，避免无界增长
 
 BUILD_NOISE = ("__pycache__/", "*.pyc", ".pytest_cache/", ".mypy_cache/", ".ruff_cache/",
-               "node_modules/", ".venv/", "target/", "dist/", "build/")
+               "node_modules/", ".venv/", "target/", "dist/", "build/", ".metrics/")
 
 # docs 落点：显式登记而非推断（AGENTS.md §3），config.docs 可覆盖
 DEFAULT_DOCS = {"progress": "docs/progress", "decisions": "docs/decisions"}
