@@ -104,6 +104,18 @@
 
 9. 谁能干谁干对应比较优势与模型路由。判断设计取舍的活交给强模型，机械替换交给便宜快的，因为前者的差别在于判断质量，后者只在于速度和单价。批次任务同源：一串顺序依赖的子项共用一次派工和一次审查，固定开销被摊薄。
 
+### 编排依赖什么
+
+依赖四样，都是现成的：git（隔离树靠 `git worktree`）、一个编排通道 CLI（hcom 或 Orca，二选一）、一个能被拉起的 agent CLI、Python 3 标准库。没有数据库、消息队列或常驻服务，`.vibe/` 就是几个 JSON 和 Markdown 文件。通道属于 AGENTS.md §4 的"安装系统级依赖"，`init` 只打印命令，不替你装。
+
+两个通道实现同一套接口（发消息、拉起 worker、等消息、清资源），形态差得很远。
+
+hcom 管的是机器上的 agent 实例，按名字寻址。worker 拿到 `<tag>-*` 这样的名字，主管用 `hcom send @名字` 发指令，`hcom events --wait --mention` 等回信，`hcom list --json` 看未读数。隔离树由 foreman 自己 `git worktree add` 建好，再把目录交给 worker。名字在机器级唯一，同机两个仓都用默认名会互相取走回执，所以 init 时默认名带路径短哈希，tag 跟着一起带，`hcom kill tag:<tag>` 只影响本仓。
+
+Orca 是带状态的原生编排，分 Run、task、dispatch 三层，worker 挂在终端上，寻址用 `run_id` 加 `dispatch:<id>`。隔离树由 Orca 建（`worker-start --worktree new-top-level`），`worker-list` 分两栏给：state 是 ready、succeeded、failed，liveness 是 live、exited，两栏合起来才判断得出 worker 是还在跑、已退出没上报，还是正常结束。`worker_done` 要带 taskId 与 dispatchId 才收。它有 hcom 没有的三样：权威的 dispatch 状态、inbox 的已读标记、worker 没上报就结束回合时主动发的 escalation。代价是重，主管会话必须在 Orca 管辖的终端里启动（`ORCA_TERMINAL_HANDLE` 由 Orca 注入），否则发不出也收不到。
+
+缺省自动判定：有 `ORCA_TERMINAL_HANDLE`、daemon 复核终端还活着、且本终端不是某个 live dispatch 的终端，就走 Orca，否则 hcom。`init --transport hcom|orca` 可以钉死。两种模式下 `task.json` 都是事实源，通道只是事件层。差别落在对账上：Orca 的 dispatch 状态和 inbox 已读标记能当权威事实，hcom 派工没有可比对的权威源，`reconcile` 对它们不出结论。
+
 ### 两条通用取向
 
 10. 机制自己也会坏。`reconcile` 拿通道的权威事实对三条账：通道说完成而状态机还在跑、worker 已退出但没上报、消息被读走却没有对应证据。合并后的清理先落盘状态再执行，失败只记结果，`doctor` 的 `resource-leaks` 报残留。这些护栏不解决工程问题，只保证解决工程问题的机制不先坏掉。
@@ -119,6 +131,8 @@
 | 根目录与 assets 用符号链接        | 一份实体，零漂移      | Windows 检出要开 `core.symlinks` |
 | worktree 而非切换分支         | 并行写互不干扰，冲突集中在合并点 | 每个任务一份磁盘与一次合并                |
 | 消息通道而非轮询状态文件           | 有权威投递记录，能对账   | 依赖通道可用，通道挂了要探测兜底             |
+| hcom 作默认通道            | 一个 CLI 就能跑，无 daemon | 没有权威 dispatch 状态，对账少一条账        |
+| Orca 作可选通道              | 有权威状态、escalation、inbox 已读标记 | 必须跑在 Orca 终端里，概念多一层           |
 | 重派上限三次                  | 卡住的任务一定交到人手上  | 前两次可能白做                      |
 | 批次任务                     | 只审一次，省往返      | diff 更长，第 3 项失败整批回退          |
 | 默认主管拆任务                  | 审查锚点成立        | 主管带宽成为瓶颈                     |
