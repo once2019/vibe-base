@@ -133,6 +133,10 @@ class TempGitRepoMixin(unittest.TestCase):
                            *(extra or [])])
         assert rc == 0, "dispatch 应成功"
 
+    def dispatch2(self, task_id: str) -> None:
+        rc = foreman.main(["dispatch", task_id, "--repo", str(self.root), "--headless"])
+        assert rc == 0, "dispatch 应成功"
+
     def hcom_calls(self) -> list[list[str]]:
         log = self.root / ".vibe" / "logs" / "hcom-log.jsonl"
         return [json.loads(x) for x in log.read_text().splitlines()]
@@ -329,6 +333,126 @@ class TestInitAndTask(TempGitRepoMixin):
         self.repo.archive_dir.mkdir()
         self.repo.task_dir("T-001").rename(self.repo.archive_dir / "T-001")
         self.assertEqual(self.repo.next_task_id(), "T-002")
+
+
+class TestPendingHumanReminder(TempGitRepoMixin):
+    """等人拍板的事项每回合重申：处理 worker 交接时不再被会话滚动埋掉（2026-11-15 实测）。"""
+
+    def test_events_appends_pending_human_after_done(self) -> None:
+        """处理完 worker 交接后，events 输出尾部必须重申别的任务里等人类的裁决。
+
+        真实事故顺序：T-001 ask 等人拍板，另一任务 DONE 到达，主管处理交接，
+        T-001 的提问被会话滚走。状态机禁止 waiting_human → review（裁决前不推进），
+        所以场景必然是两个任务。
+        """
+        self.full_task()
+        self.dispatch()
+        self.assertEqual(foreman.main(["ask", "T-001", "--repo", str(self.root),
+                                       "--question", "允许改 schema？", "--options", "允许,不允许"]), 0)
+        self.assertEqual(self.repo.load_task("T-001")["status"], "waiting_human")
+        # 另一个任务正常走 DONE
+        self.assertEqual(foreman.main(["task", "new", "--repo", str(self.root),
+                                       "--title", "改文档", "--scope", "docs/",
+                                       "--accept", "true"]), 0)
+        self.assertEqual(foreman.main(["task", "set-acceptance", "T-002", "--repo",
+                                       str(self.root), "--accept", "true"]), 0)
+        (self.root / "docs").mkdir(exist_ok=True)
+        (self.root / "docs" / "note.md").write_text("x\n", encoding="utf-8")
+        run_git(self.root, "add", ".")
+        run_git(self.root, "commit", "-q", "-m", "add docs")
+        self.dispatch2("T-002")
+        self.set_event("[FOREMAN:DONE] task=T-002 dispatch=D-001\n完成")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(foreman.main(["events", "--repo", str(self.root), "--timeout", "1"]), 0)
+        text = out.getvalue()
+        self.assertIn("等你拍板", text, "events 尾部必须重申待裁决项")
+        self.assertIn("允许改 schema？", text)
+        self.assertIn("reply <任务>", text)
+
+    def test_escalate_also_reminds(self) -> None:
+        """escalation 进来时同样重申待裁决项（三条 emit 路径都要接）。"""
+        self.assertEqual(foreman.main(["init", "--repo", str(self.root), "--transport", "orca"]), 0)
+        self.full_task()
+        self.dispatch()  # Orca transport：fake orca 记录并回 worker-start 回执
+        self.assertEqual(foreman.main(["ask", "T-001", "--repo", str(self.root),
+                                       "--question", "要改 CI 吗？"]), 0)
+        # 另一任务派工后，伪造 escalation（worker 结束回合未上报）
+        self.assertEqual(foreman.main(["task", "new", "--repo", str(self.root),
+                                       "--title", "改文档", "--scope", "docs/",
+                                       "--accept", "true"]), 0)
+        (self.root / "docs").mkdir(exist_ok=True)
+        (self.root / "docs" / "note.md").write_text("x\n", encoding="utf-8")
+        run_git(self.root, "add", ".")
+        run_git(self.root, "commit", "-q", "-m", "add docs")
+        self.dispatch2("T-002")
+        t2 = self.repo.load_task("T-002")
+        d2 = t2["dispatches"][-1]
+        # escalation 的 payload 指向 T-002 的 dispatch：events 会把它转成 [FOREMAN:ESCALATE]
+        ev = self.root / ".vibe" / "logs" / "fake-orca-event.json"
+        ev.write_text(json.dumps({"id": "m1", "type": "escalation", "from": "term_x",
+                                  "subject": "Worker stopped without reporting",
+                                  "payload": json.dumps({
+                                      "taskId": d2.get("orchestration_task") or "ot-1",
+                                      "dispatchId": (d2.get("worker_handle") or "").split(":")[-1],
+                                      "stopReason": "finished"})}))
+        os.environ["FAKE_ORCA_EVENT"] = str(ev)
+        self.addCleanup(os.environ.pop, "FAKE_ORCA_EVENT", None)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            rc = foreman.main(["events", "--repo", str(self.root), "--timeout", "1"])
+        self.assertEqual(rc, 0)
+        text = out.getvalue()
+        self.assertIn("ESCALATE", text, "escalation 必须被识别并上行")
+        self.assertIn("等你拍板", text, "escalation 路径同样要重申待裁决项")
+        self.assertIn("要改 CI 吗？", text)
+
+    def test_timeout_path_also_reminds(self) -> None:
+        """events 空等超时（无消息）时同样重申待裁决项——这正是"忘了要拍板"最容易发生的场景。"""
+        self.full_task()
+        self.dispatch()
+        self.assertEqual(foreman.main(["ask", "T-001", "--repo", str(self.root),
+                                       "--question", "选哪个方案？"]), 0)
+        # fake hcom 不注入事件 → 空等超时
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            rc = foreman.main(["events", "--repo", str(self.root), "--timeout", "1"])
+        self.assertNotEqual(rc, 0, "空等超时应非零退出（既有行为）")
+        text = out.getvalue()
+        self.assertIn("等你拍板", text, "超时路径同样要重申待裁决项")
+        self.assertIn("选哪个方案？", text)
+
+    def test_pending_cleared_after_reply(self) -> None:
+        self.full_task()
+        self.dispatch()
+        foreman.main(["ask", "T-001", "--repo", str(self.root), "--question", "选哪个？"])
+        rel = self.write_decision_doc("2026-11-15-test-decision.md")
+        self.assertEqual(foreman.main(["reply", "T-001", "--repo", str(self.root),
+                                       "--body", "选 A", "--decision-doc", rel]), 0)
+        self.assertEqual(foreman.pending_human_decisions(self.repo), [],
+                         "裁决后不得再出现在提醒里")
+
+    def test_waiting_answer_not_counted(self) -> None:
+        """waiting_answer 是等 worker 回话，不该出现在等人拍板的清单里。"""
+        self.full_task()
+        self.dispatch()
+        task = self.repo.load_task("T-001")
+        task["status"] = "waiting_answer"
+        self.repo.save_task(task)
+        self.assertEqual(foreman.pending_human_decisions(self.repo), [])
+
+    def test_waited_minutes_shown(self) -> None:
+        self.full_task()
+        self.dispatch()
+        foreman.main(["ask", "T-001", "--repo", str(self.root), "--question", "需要改 CI？"])
+        task = self.repo.load_task("T-001")
+        gate = task["gates"][-1]
+        gate["at"] = "2026-01-01T00:00:00Z"  # 很久以前：等了 N 分钟要显示出来
+        self.repo.save_task(task)
+        items = foreman.pending_human_decisions(self.repo)
+        self.assertEqual(len(items), 1)
+        self.assertGreater(items[0]["waited_min"], 10000)
+        self.assertIn("已等", foreman.human_decisions_line(items))
 
 
 class TestDispatchReflection(TempGitRepoMixin):

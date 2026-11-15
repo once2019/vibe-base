@@ -106,3 +106,17 @@ keep、M8 stale_worktrees 登记四处新增测试全部转红），M4（keep_di
 
 测试 186 → 191（+5：Orca 双树同名分支 merge、abandon blocked 共享分支、cleanup 残留兜底、
 launch 降级、set-acceptance shell 警告）。
+
+## 追记 2026-11-15（等人拍板事项每回合重申）
+
+人类反馈的失效模式：主管问人类拍板后，worker 的 DONE 到达，主管处理交接，拍板请求被会话滚走遗忘。
+
+修法：`events` 三条输出路径（消费消息 / escalation / 空等超时）末尾都追加 `pending_human_decisions()`
+的清单——`waiting_human` 任务加未关 gate，带已等分钟数与选项，一行 reply 指令。状态在 task.json，
+不靠会话滚动。`waiting_answer` 是等 worker，不算。
+
+变异五处全守住（M1 DONE 路径、M2 ESCALATE 路径、M3 超时路径、M4 状态条件、M3 前两轮误报系变异
+目标打错位置，修正后守住）。测试 192 → 198。
+
+注意状态机禁止 `waiting_human → review`：DONE 到达时等待中的任务不会被推进（裁决前不放行），
+所以提醒场景必然是多任务并发——测试按双任务构造。

@@ -2333,6 +2333,46 @@ def write_wait_streak(repo: Repo, n: int) -> None:
     write_json(wait_streak_path(repo), {"empty_waits": n, "at": now_iso()})
 
 
+def pending_human_decisions(repo: Repo) -> list[dict]:
+    """当前等人拍板的事项：waiting_human 任务 + 未关的 gate。
+
+    会话滚动不可靠：主管处理 worker 交接时，之前问人类的裁决会被滚走遗忘（2026-11-15 实测）。
+    状态在 task.json 里，缺的是每回合把它们拎出来重申。waiting_answer 是等 worker 回话，不算。
+    """
+    out: list[dict] = []
+    now = datetime.now(timezone.utc)
+    for tj in sorted(repo.tasks_dir.glob("*/task.json")):
+        task = read_json(tj)
+        if task.get("status") != "waiting_human":
+            continue
+        for g in task.get("gates") or []:
+            if g.get("resolved"):
+                continue
+            try:
+                at = datetime.strptime(str(g.get("at", "")), "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+                waited = now - at
+            except ValueError:
+                waited = None
+            out.append({"task": task["id"], "title": task.get("title") or "",
+                        "question": str(g.get("question") or ""),
+                        "options": g.get("options") or [],
+                        "waited_min": int(waited.total_seconds() // 60) if waited else None})
+    return out
+
+
+def human_decisions_line(items: list[dict]) -> str:
+    if not items:
+        return ""
+    lines = [f"\n⚠ {len(items)} 项等你拍板（处理 worker 交接时别把它们滚忘了）："]
+    for x in items:
+        wait = f"，已等 {x['waited_min']} 分钟" if x["waited_min"] is not None else ""
+        opts = f"（选项：{' / '.join(x['options'])}）" if x["options"] else ""
+        q = x["question"][:80]
+        lines.append(f"  {x['task']}「{x['title']}」：{q}{opts}{wait}")
+    lines.append("  答复：reply <任务> --body \"<裁决与理由>\"（Ask-first 裁决须 --decision-doc）")
+    return "\n".join(lines)
+
+
 def cmd_events(args: argparse.Namespace) -> int:
     repo = Repo(Path(args.repo))
     cfg = effective_config(repo)
@@ -2369,8 +2409,11 @@ def cmd_events(args: argparse.Namespace) -> int:
         tail = (f"\n这是连续第 {streak}/{MAX_EMPTY_WAITS} 轮空等：结束回合，"
                 "在 docs/memory/handoff.md 运行态写一行「在等什么」，等通道唤醒后再跑 events。"
                 + ("" if left <= 0 else f"（还要继续等的话，还剩 {left} 轮余量，别连开窗口）"))
-        emit(args, {"timed_out": True, "skipped": skipped, "empty_waits": streak},
-             "等待超时，无匹配协议消息" + hint + tail)
+        pend = pending_human_decisions(repo)
+        dec = human_decisions_line(pend)
+        emit(args, {"timed_out": True, "skipped": skipped, "empty_waits": streak,
+                    "pending_human": pend},
+             "等待超时，无匹配协议消息" + hint + tail + dec)
         return EXIT_ERROR
     if event.get("escalation"):
         esc = event["escalation"]
@@ -2390,10 +2433,12 @@ def cmd_events(args: argparse.Namespace) -> int:
         result = apply_protocol_event(repo, cfg, {"instance": esc["from"],
                                                   "data": {"text": text, "from": esc["from"]}})
         result["escalation"] = esc
+        result["pending_human"] = pending_human_decisions(repo)
         emit(args, result,
              f"[ESCALATE] {task_id}/{dispatch_id} 来自 {esc['from']} → 任务状态 {result['task_status']}"
              f"（Orca 报 worker 结束回合未上报，stopReason={esc.get('stop_reason')}）"
-             + (f"\n建议：{result['hint']}" if result.get("hint") else ""))
+             + (f"\n建议：{result['hint']}" if result.get("hint") else "")
+             + human_decisions_line(result["pending_human"]))
         return EXIT_OK
 
     if event.get("rejected"):
@@ -2407,6 +2452,7 @@ def cmd_events(args: argparse.Namespace) -> int:
     result = apply_protocol_event(repo, cfg, event)
     if extra:
         result["batch_extra"] = extra
+    result["pending_human"] = pending_human_decisions(repo)
     emit(args, result,
          f"[{result['type']}] {result['task']}/{result['dispatch']} 来自 {result['from']} → 任务状态 {result['task_status']}"
          + (f"\n建议：{result['hint']}" if result.get("hint") else "")
@@ -2415,7 +2461,8 @@ def cmd_events(args: argparse.Namespace) -> int:
             if result.get("sender_unexpected") else "")
          + (f"\n注意：同批还有 {len(result['batch_extra'])} 条消息未处理"
             f"（{', '.join(str(x) for x in result['batch_extra'])}），全文已留档 "
-            f"{repo.logs_dir / 'batch-unhandled.log'}" if result.get("batch_extra") else ""))
+            f"{repo.logs_dir / 'batch-unhandled.log'}" if result.get("batch_extra") else "")
+         + human_decisions_line(result["pending_human"]))
     return EXIT_OK
 
 
