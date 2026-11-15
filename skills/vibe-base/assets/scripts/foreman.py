@@ -1095,7 +1095,7 @@ class Orca(Transport):
             fail(f"orchestration worker-start 失败：{detail[:300]}{hint}")
         wdata = self._ok_json(proc, "orchestration worker-start")
         dispatch_id, wt_path, wt_sel, branch = self._find_worker(wdata)
-        info = {
+        info: dict = {
             "worker_handle": f"dispatch:{dispatch_id}",
             "orchestration_task": task_id,
             "worktree": wt_path,
@@ -1103,7 +1103,7 @@ class Orca(Transport):
             "branch": branch,
         }
         if stale_trees:
-            info["stale_worktrees"] = stale_trees
+            info["stale_worktrees"] = stale_trees  # mypy：info 统一标 dict，值类型才兼容
         return info
 
     def _find_id(self, data: dict) -> str | None:
