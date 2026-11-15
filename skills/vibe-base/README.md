@@ -104,16 +104,6 @@
 
 9. 判断的活给强模型，搬砖的活给便宜的。改文案、批量重命名、补测试，模型强弱差别不大，占的是同一份注意力。批次任务同理：一串有顺序的子项共用一次派工和一次审查，派工与审查的固定开销只付一次。
 
-### 编排依赖什么
-
-编排要四样现成的东西：git（`git worktree` 建隔离树）、一个通道 CLI（hcom 或 Orca）、一个能拉起的 agent CLI、Python 3 标准库。没有数据库、消息队列或常驻服务，`.vibe/` 就是几个 JSON 和 Markdown。通道属 AGENTS.md §4 的系统级依赖，`init` 只打印命令。
-
-hcom 按实例名寻址：worker 叫 `<tag>-*`，主管用 `hcom send @名字` 发指令，`hcom events --wait --mention` 等回信，`hcom list --json` 看未读数。隔离树由 foreman 自己 `git worktree add` 建好再交给 worker。名字在机器级唯一，同机两个仓用默认名会互相取走回执，所以 init 时默认名带路径短哈希，`hcom kill tag:<tag>` 只影响本仓。
-
-Orca 是带状态的原生编排，分 Run、task、dispatch 三层，worker 挂在终端上，按 `run_id` 加 `dispatch:<id>` 寻址。隔离树由它建（`worker-start --worktree new-top-level`）。`worker-list` 分两栏：state 是 ready、succeeded、failed，liveness 是 live、exited，合起来才判断得出 worker 在跑、已退出没上报，还是正常结束。`worker_done` 要带 taskId 与 dispatchId 才收。它比 hcom 多三样：权威的 dispatch 状态、inbox 已读标记、worker 没上报就结束回合时主动发的 escalation。代价是主管会话必须在 Orca 管辖的终端里启动（`ORCA_TERMINAL_HANDLE` 由它注入）。
-
-缺省自动判定：有 `ORCA_TERMINAL_HANDLE`、daemon 复核终端还活着、且本终端不是某个 live dispatch 的终端，就走 Orca，否则 hcom。`init --transport hcom|orca` 可以钉死。两种模式下 `task.json` 都是事实源，差别落在对账：Orca 的 dispatch 状态和已读标记能当权威事实，hcom 派工没有权威源，`reconcile` 对它们不出结论。
-
 ### 两条通用取向
 
 10. 机制自己也会坏。`reconcile` 拿通道的权威事实对三条账：通道说完成而状态机还在跑、worker 已退出但没上报、消息被读走却没有对应证据。合并后的清理先落盘状态再执行，失败只记结果，`doctor` 的 `resource-leaks` 报残留。这些护栏不解决工程问题，只保证机制不先坏掉。
@@ -137,7 +127,19 @@ Orca 是带状态的原生编排，分 Run、task、dispatch 三层，worker 挂
 | `events` 不设逃生门           | 规则不会被绕过       | 探测失败时可能多等一轮                  |
 | 合并后不自动 push              | 人保留最后决定权      | 每次要手动推                       |
 
-## 四、什么时候用
+## 四、依赖与环境
+
+只有两样要单独准备：一个编排通道 CLI，一个能被拉起的 agent CLI。git 与 Python 3 标准库系统自带，`.vibe/` 只是几个文件，没有数据库、消息队列或常驻服务。
+
+通道二选一，都属 AGENTS.md §4 的"安装系统级依赖"，`init` 只打印命令，不替你装。
+
+hcom 轻，装好一个 CLI 就能用，没有 daemon。名字在机器级唯一，同机两个仓用默认名会互相取走回执，init 时自动带路径短哈希，`hcom kill tag:<tag>` 只影响本仓。
+
+Orca 重，是带状态的原生编排，分 Run、task、dispatch 三层。跑它有两个环境条件：主管会话必须在 Orca 管辖的终端里启动，`ORCA_TERMINAL_HANDLE` 由 Orca 注入，缺了发不出也收不到；还要有一个 Run，`doctor` 的 `orca-run` 会要求先 `run-create`。
+
+缺省自动判定：有 `ORCA_TERMINAL_HANDLE`、daemon 复核终端还活着、且本终端不是某个 live dispatch 的终端，就走 Orca，否则 hcom。`init --transport hcom|orca` 可以钉死。
+
+## 五、什么时候用
 
 适合这几种情况：
 
@@ -157,7 +159,7 @@ Orca 是带状态的原生编排，分 Run、task、dispatch 三层，worker 挂
 - 一次性脚本。
 - 没有测试基础设施的项目。验收命令写不出来，整套审查就没有锚点。
 
-## 五、开始使用
+## 六、开始使用
 ```bash
 
 mkdir -p ~/.agent/skills
