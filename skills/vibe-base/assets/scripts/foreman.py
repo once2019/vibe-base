@@ -933,24 +933,6 @@ class Hcom(Transport):
                 "detail": f"{name} 已被 {where} 的会话占用：worker 的 DONE/ASK 会串到那个仓",
                 "fix": f"init --foreman-name {slugify(self.repo.root.name)}-foreman（改名后重启会话），或等那个会话结束"}
 
-    def stop_prev_worker(self, repo: Repo, dispatch: dict) -> dict:
-        """重派前结算上一 attempt：worker-stop（隔离）+ worker-release（关终端），不删 worktree/分支。
-
-        两条都是本地 daemon 调用，30 秒足够；给 300 秒会让重派卡十分钟。
-        """
-        res: dict = {"notes": []}
-        handle = str(dispatch.get("worker_handle") or "")
-        if not handle.startswith("dispatch:"):
-            return res
-        did = handle.split(":", 1)[1]
-        for cmd in ("worker-stop", "worker-release"):
-            proc = self._run("orchestration", cmd, "--dispatch", did, "--json", timeout=30)
-            if proc.returncode == 0:
-                res["notes"].append(f"上一派工 {did} 已 {cmd}")
-            else:
-                res["notes"].append(f"上一派工 {did} {cmd} 未成功（已结算的会跳过，不影响重派）")
-        return res
-
     def cleanup(self, repo: Repo, dispatch: dict) -> dict:
         res: dict = {"dispatch": dispatch.get("id"), "worktree_removed": None,
                      "branch_deleted": None, "worker_released": None, "notes": []}
@@ -2728,6 +2710,30 @@ def cmd_merge(args: argparse.Namespace) -> int:
     # 清理：删 worktree / 分支 / 结算 worker。失败只记结果，由 task["cleanup"] 与 doctor 暴露
     cleaned = make_transport(repo, cfg).cleanup(repo, dispatch)
     task["cleanup"] = dict(cleaned, at=now_iso())
+    # 被淘汰 attempt 的树：任务已完成，前几次的树没有再用处。Orca 每个 attempt 一棵新树，
+    # 只清最后一次就是永久泄漏（实测 T-036 的 D-001/D-002 两棵留在 ~/orca/workspaces）。
+    stale: list[str] = []
+    for d in task.get("dispatches", []):
+        if d.get("id") == dispatch.get("id"):
+            continue
+        old_wt = str(d.get("worktree") or "")
+        old_branch = d.get("branch") or ""
+        if not old_wt or old_wt == "." or Path(old_wt) == wt:
+            continue  # hcom 模式所有 attempt 共用一棵树
+        old_path = Path(old_wt)
+        if old_path.exists():
+            proc = repo.git_try("worktree", "remove", "--force", old_wt)
+            if proc.returncode != 0:
+                repo.git_try("worktree", "prune")
+                proc = repo.git_try("worktree", "remove", "--force", old_wt)
+            stale.append(f"{d['id']} 树已删" if proc.returncode == 0
+                         else f"{d['id']} 树删除失败（{(proc.stderr or '').strip()[:120]}）")
+        if old_branch and old_branch != branch:
+            proc = repo.git_try("branch", "-D", old_branch)
+            stale.append(f"{d['id']} 分支已删" if proc.returncode == 0
+                         else f"{d['id']} 分支删除失败（{(proc.stderr or '').strip()[:120]}）")
+    if stale:
+        task["cleanup"]["stale_attempts"] = stale
     repo.log_task(task, "cleaned", "; ".join(cleaned.get("notes") or []) or "无清理动作")
     leftover = [k for k in CLEANUP_RESULT_KEYS if cleaned.get(k) is False]
     if leftover:

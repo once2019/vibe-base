@@ -2068,6 +2068,42 @@ class TestDefaultForemanName(unittest.TestCase):
             self.assertNotEqual(na, nb)
 
 
+class TestMergeCleansStaleAttempts(TempGitRepoMixin):
+    """任务完成时，被淘汰 attempt 的树与分支也要清：Orca 每个 attempt 一棵新树。
+
+    实测 T-036 的 D-001/D-002 两棵留在 ~/orca/workspaces，doctor 的 resource-leaks 报出来。
+    """
+
+    def test_merge_removes_stale_attempt_trees(self) -> None:
+        self.full_task()
+        self.dispatch()
+        task = self.repo.load_task("T-001")
+        stale_wt = Path(tempfile.mkdtemp(prefix="foreman-stale-")) / "wt"
+        self.addCleanup(shutil.rmtree, stale_wt.parent, True)
+        run_git(self.root, "worktree", "add", "-q", str(stale_wt), "-b", "foreman/T-001-old")
+        task["dispatches"].insert(0, {
+            "id": "D-000", "attempt": 1, "at": "2026-01-01T00:00:00Z",
+            "worktree": str(stale_wt), "branch": "foreman/T-001-old",
+            "worker_handle": "dispatch:ctx_old", "agent": "codex",
+        })
+        self.repo.save_task(task)
+
+        wt = Path(task["dispatches"][-1]["worktree"])
+        (wt / "src" / "feature.txt").write_text("done\n", encoding="utf-8")
+        self.commit_in(wt, "feat: x")
+        self.set_event("[FOREMAN:DONE] task=T-001 dispatch=D-001\n完成")
+        self.assertEqual(self.run_events(), 0)
+        self.assertEqual(foreman.main(["review", "T-001", "--repo", str(self.root)]), 0)
+        self.assertEqual(foreman.main(["merge", "T-001", "--repo", str(self.root)]), 0)
+
+        self.assertFalse(stale_wt.exists(), "被淘汰 attempt 的树必须删，否则永久占磁盘")
+        branches = subprocess.run(["git", "branch", "--list", "foreman/T-001-old"],
+                                  cwd=self.root, capture_output=True, text=True).stdout
+        self.assertEqual(branches.strip(), "", "被淘汰 attempt 的分支也要删")
+        task = self.repo.load_task("T-001")
+        self.assertIn("D-000 树已删", " ".join(task["cleanup"]["stale_attempts"]))
+
+
 class TestMergePostVerify(TempGitRepoMixin):
     """合并后复跑验收不过：合并提交已存在，任务保持 merge_ready，不许自动重试。"""
 

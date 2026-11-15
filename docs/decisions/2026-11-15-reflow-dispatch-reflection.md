@@ -48,3 +48,17 @@ worker 名字带 attempt 是补充：hcom 模式下 `w-{task_id}` 每次重派�
 - 涉及文件：`scripts/foreman.py`（状态机、config 默认、三个 transport、`cmd_dispatch`、`cmd_task_unblock`、`cmd_reconcile`、子命令注册）、`tests/test_foreman.py`（+6 条）、`docs/governance/orchestration.md`、storyboard-maker 的 `scripts/foreman.py` 与 `orchestration.md`
 - 兼容性影响：`blocked` 增加 `failed` 出口属状态机放宽，旧任务文件不受影响；worker 名字格式变化只影响新派工，历史派工记录里的 handle 仍是旧格式，反查按记录本身匹配
 - 后续约束：项目自持副本要靠人工同步；下次改动 `scripts/foreman.py` 后要重跑 storyboard 的门禁再提交
+
+## 追记 2026-11-15（被淘汰 attempt 的树）
+
+回流后跑 storyboard 的 doctor，`resource-leaks` 报出 T-036 的两棵树：`w-T-036`（D-001）与 `w-T-036-2`（D-002），
+都在 `~/orca/workspaces/`。原因是 `merge` 的清理只处理最后一次 dispatch，前几次 attempt 的树没人管；而 Orca
+每个 attempt 建一棵新树，等于每失败一次留一份永久副本。
+
+修法：`merge` 在清理当前 dispatch 后遍历其余 dispatch，删掉仍存在的树与分支（`worktree remove --force` 失败先
+`prune` 再重试一次），结果记进 `task["cleanup"]["stale_attempts"]`。hcom 模式所有 attempt 共用一棵树，按路径相等跳过。
+
+实际清理了 T-036 的两棵树与 `once2019/w-T-036*` 两个分支（被淘汰 attempt 的产物，D-003 才是合并的那个），
+清理前确认过树是干净的，SHA 留在会话记录里。
+
+测试 181 → 182。
