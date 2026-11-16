@@ -563,6 +563,20 @@ class TestWorktreeBootstrap(TempGitRepoMixin):
         self.assertEqual((wt / ".env").read_text(encoding="utf-8"), "TOKEN=1\n")
         self.assertIn("已把主仓的 .env 软链进新树", out.getvalue())
 
+    def test_worktree_links_refuse_paths_outside_repo(self) -> None:
+        """登记项不许跳出仓库：软链到仓外的 .env 等于把别的目录带进树。"""
+        cfg = self.repo.config()
+        cfg["worktree_links"] = ["../outside.env", "/etc/passwd"]
+        self.repo.config_path.write_text(json.dumps(cfg), encoding="utf-8")
+
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.dispatch()
+        self.assertIn("含非法路径", out.getvalue())
+        wt = Path(self.repo.load_task("T-001")["dispatches"][0]["worktree"])
+        self.assertFalse((wt / "outside.env").exists())
+        self.assertFalse((wt / "etc" / "passwd").exists())
+
     def test_worktree_links_report_missing_and_not_ignored(self) -> None:
         """登记了主仓没有的文件、或软链没被忽略，都要当场说出来，不静默。"""
         (self.root / "notes.txt").write_text("x\n", encoding="utf-8")  # 未提交也未忽略
@@ -577,6 +591,27 @@ class TestWorktreeBootstrap(TempGitRepoMixin):
         self.assertIn("登记了但主仓不存在：.env", text)
         self.assertIn("软链未被忽略", text)
         self.assertIn("notes.txt", text)
+
+class TestOrcaWorktreeLinks(TempGitRepoMixin):
+    """Orca 的树由 worker-start 建，路径只在回执里，只能启动后补链。"""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.assertEqual(foreman.main(["init", "--repo", str(self.root), "--transport", "orca"]), 0)
+        self.full_task()
+        self.wt = Path(tempfile.mkdtemp(prefix="orca-wt-")) / "wt"
+        run_git(self.root, "worktree", "add", str(self.wt), "-b", "foreman/T-001-impl", "master")
+        os.environ["FAKE_ORCA_WT"] = str(self.wt)
+        (self.root / ".env").write_text("TOKEN=1\n", encoding="utf-8")
+        cfg = self.repo.config()
+        cfg["worktree_links"] = [".env"]
+        self.repo.config_path.write_text(json.dumps(cfg), encoding="utf-8")
+        self.assertEqual(foreman.main(["dispatch", "T-001", "--repo", str(self.root)]), 0)
+
+    def test_links_into_orca_managed_tree(self) -> None:
+        self.assertTrue((self.wt / ".env").is_symlink(), "Orca 托管树也要拿到登记的本地配置")
+        self.assertEqual((self.wt / ".env").read_text(encoding="utf-8"), "TOKEN=1\n")
+
 
 class TestDispatch(TempGitRepoMixin):
     def test_dispatch_creates_tree_and_calls_hcom(self) -> None:
@@ -731,6 +766,21 @@ class TestEventFlow(TempGitRepoMixin):
         ask = self.repo.load_task("T-001")["asks"][-1]
         self.assertTrue(ask.get("answered_at"), "答复后 asks[] 必须留答复时间")
         self.assertEqual(ask.get("answer"), "选 A")
+
+    def test_reply_marks_ask_of_that_dispatch(self) -> None:
+        """迟到的答复不能记到别的 attempt 的请示上：按 dispatch 配对。"""
+        self.set_event("[FOREMAN:ASK] task=T-001 dispatch=D-001\n第一次请示")
+        self.run_events()
+        # 第二次派工后又有一次请示，此时回第一次的 dispatch
+        task = self.repo.load_task("T-001")
+        task["asks"].append({"dispatch": "D-002", "from": "w-T-001-a2", "at": "2026-01-01T00:00:00Z",
+                             "question": "第二次请示"})
+        self.repo.save_task(task)
+        self.assertEqual(foreman.main(["reply", "T-001", "--repo", str(self.root),
+                                       "--dispatch", "D-001", "--body", "答第一次"]), 0)
+        asks = self.repo.load_task("T-001")["asks"]
+        self.assertTrue(asks[0].get("answered_at"), "D-001 的请示要记答复")
+        self.assertFalse(asks[1].get("answered_at"), "D-002 的请示不能被记上别人的答复")
 
     def test_brief_requires_actionable_leftovers(self) -> None:
         """遗留项写成可直接派单的形态：只写「后续优化 XX」等于没交代。"""

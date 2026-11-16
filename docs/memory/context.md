@@ -9,7 +9,6 @@
 
 - `events` 三条输出路径末尾重申 `waiting_human` 与未关 gate（带已等分钟数、选项、reply 指令）
 - 技能包版本 1.1.0 → 1.2.0；回归 173 → 198 项
-- README 与 SKILL 按实际能力校正：doctor 18 项、governance 八份细则、unblock 出口、可选质量门槛、安装路径
 - §3 两条原则命名：奥卡姆剃刀（删掉会发生什么）与第一性原理（由哪几条约束推出）
 - 编码纪律补「按应用点复制」判据（第二个应用点出现第二份实现即该收敛）
 - 状态机 failed→review 补入口（只加边不开入口等于没修，实测 storyboard dc63e9e）
@@ -18,7 +17,8 @@
 - worktree 自举：config `worktree_links` 登记 → dispatch 建树后软链，缺项与未忽略当场告警
 - mutation_check 不做：留证已由 DONE 正文承担，变异点发现已有 mutator
 - 技能文档去重：SKILL 安装与 Tradeoff 散文、两份细则对 §3 的原话复述删掉
-- 决策 19 条（含追记）；回归 198 → 204 项
+- 五轴复审自纠四处：helper 归位、仓外路径拒绝、asks 按 dispatch 配对、Orca 补链补测
+- 决策 19 条（含审查修订）；回归 198 → 207 项
 
 ## 进行中任务
 

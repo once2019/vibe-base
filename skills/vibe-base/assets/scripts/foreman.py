@@ -2063,6 +2063,53 @@ def cmd_task_show(args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------- 命令：dispatch
 
 
+def link_local_deps(repo: Repo, tree: Path, cfg: dict) -> dict:
+    """把主仓的本地配置软链进新树（隔离的代价要配套自举）。
+
+    带什么由 config 的 worktree_links 登记：新树缺 .env/.venv 是通用现象，
+    缺哪个文件是项目知识，猜不得（AGENTS.md §3「不推断未登记的集合」）。
+    只建软链，不执行命令，不给 shell 执行面。
+    """
+    linked: list[str] = []
+    missing: list[str] = []
+    not_ignored: list[str] = []
+    invalid: list[str] = []
+    for raw in cfg.get("worktree_links") or []:
+        rel = str(raw).strip().strip("/")
+        if not rel:
+            continue
+        if Path(rel).is_absolute() or ".." in Path(rel).parts:
+            invalid.append(str(raw))  # 与 --decision-doc 同口径：不许跳出仓库
+            continue
+        src = repo.root / rel
+        dst = tree / rel
+        if not src.exists():
+            missing.append(rel)
+            continue
+        if dst.exists() or dst.is_symlink():
+            continue  # 重派复用同一棵树：幂等
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.symlink_to(src.resolve())
+        linked.append(rel)
+        if repo.git_try("-C", str(tree), "check-ignore", "-q", rel).returncode != 0:
+            not_ignored.append(rel)  # 没被忽略的软链会被 worker 的 git add 带进提交
+    return {"linked": linked, "missing": missing, "not_ignored": not_ignored, "invalid": invalid}
+
+
+def worktree_link_notes(repo: Repo, tree: Path, cfg: dict) -> list[str]:
+    deps = link_local_deps(repo, tree, cfg)
+    notes: list[str] = []
+    if deps["linked"]:
+        notes.append("已把主仓的 " + ", ".join(deps["linked"]) + " 软链进新树")
+    if deps["missing"]:
+        notes.append("worktree_links 登记了但主仓不存在：" + ", ".join(deps["missing"]))
+    if deps["invalid"]:
+        notes.append("worktree_links 含非法路径（不许绝对路径或 ..）：" + ", ".join(deps["invalid"]))
+    if deps["not_ignored"]:
+        notes.append("软链未被忽略，worker 的 git add 可能把它带进提交：" + ", ".join(deps["not_ignored"]))
+    return notes
+
+
 def cmd_dispatch(args: argparse.Namespace) -> int:
     repo = Repo(Path(args.repo))
     cfg = effective_config(repo)
@@ -2202,47 +2249,6 @@ def cmd_dispatch(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------- 命令：events / reply / ask
-
-
-def link_local_deps(repo: Repo, tree: Path, cfg: dict) -> dict:
-    """把主仓的本地配置软链进新树（隔离的代价要配套自举）。
-
-    带什么由 config 的 worktree_links 登记：新树缺 .env/.venv 是通用现象，
-    缺哪个文件是项目知识，猜不得（AGENTS.md §3「不推断未登记的集合」）。
-    只建软链，不执行命令，不给 shell 执行面。
-    """
-    linked: list[str] = []
-    missing: list[str] = []
-    not_ignored: list[str] = []
-    for raw in cfg.get("worktree_links") or []:
-        rel = str(raw).strip().strip("/")
-        if not rel:
-            continue
-        src = repo.root / rel
-        dst = tree / rel
-        if not src.exists():
-            missing.append(rel)
-            continue
-        if dst.exists() or dst.is_symlink():
-            continue  # 重派复用同一棵树：幂等
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        dst.symlink_to(src.resolve())
-        linked.append(rel)
-        if repo.git_try("-C", str(tree), "check-ignore", "-q", rel).returncode != 0:
-            not_ignored.append(rel)  # 没被忽略的软链会被 worker 的 git add 带进提交
-    return {"linked": linked, "missing": missing, "not_ignored": not_ignored}
-
-
-def worktree_link_notes(repo: Repo, tree: Path, cfg: dict) -> list[str]:
-    deps = link_local_deps(repo, tree, cfg)
-    notes: list[str] = []
-    if deps["linked"]:
-        notes.append("已把主仓的 " + ", ".join(deps["linked"]) + " 软链进新树")
-    if deps["missing"]:
-        notes.append("worktree_links 登记了但主仓不存在：" + ", ".join(deps["missing"]))
-    if deps["not_ignored"]:
-        notes.append("软链未被忽略，worker 的 git add 可能把它带进提交：" + ", ".join(deps["not_ignored"]))
-    return notes
 
 
 def save_evidence(repo: Repo, task_id: str, name: str, text: str) -> Path:
@@ -2583,8 +2589,11 @@ def cmd_reply(args: argparse.Namespace) -> int:
     else:
         task.setdefault("decisions", []).append({"level": "T2", "at": now_iso(), "note": args.body})
     # asks[] 记「问过」，答复也要记「答过」：只写不答的账，人读 task.json 会以为还在等。
-    if task.get("asks") and not task["asks"][-1].get("answered_at"):
-        task["asks"][-1].update(answered_at=now_iso(), answer=args.body)
+    # 按 dispatch 配对：迟到的答复不能记到别的 attempt 的请示上。
+    pending_ask = next((a for a in reversed(task.get("asks") or [])
+                        if a.get("dispatch") == target["id"] and not a.get("answered_at")), None)
+    if pending_ask:
+        pending_ask.update(answered_at=now_iso(), answer=args.body)
     repo.set_status(task, "running")
     repo.log_task(task, "running", f"ANSWER → {target['id']}（{'T3 人类裁决' if was_human_gate else 'T2 主管裁决'}）：{args.body[:80]}")
     repo.save_task(task)
