@@ -17,7 +17,7 @@
 
 - 技能包 `skills/vibe-base` 1.2.0：骨架 17 文件（AGENTS.md + 15 docs + `scripts/foreman.py`），回归 198 项
 - 控制面：doctor 18 项（含 `decisions-index`、`orchestration-reconcile`、`resource-leaks`、`quality-tools`）
-- 编码纪律细则 `docs/governance/coding-discipline.md`：六条判据 + 三段顺序 + 可选质量门槛
+- 编码纪律细则 `docs/governance/coding-discipline.md`：七条判据 + 三段顺序 + 可选质量门槛
 - `events` 三条输出路径末尾重申 `waiting_human` 与未关 gate，`waiting_answer` 不算
 - 未完成清单：空
 

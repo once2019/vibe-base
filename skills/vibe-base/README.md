@@ -46,7 +46,9 @@
 
 5. 危险动作集中一处。Ask-first 清单只在 `AGENTS.md` §4 维护：引入依赖、装系统级依赖、改 CI 或部署、删数据、force push。其他文档只引用，不复制。
 
-6. 文档与代码同一次提交。需求变更先改 `docs/specs/` 的描述与验收标准，再改代码；新建权威文档先查目录索引，建完立刻登记一行。落点是六处：`AGENTS.md` 放红线，`docs/decisions/` 放决策，`docs/memory/` 放记忆，`docs/progress/` 放竣工单，`docs/specs/` 放规格，`docs/design/` 放设计与调研。
+6. 编码纪律单独成篇。`AGENTS.md` §3 是红线，操作条文在 `docs/governance/coding-discipline.md`：三段顺序（先能跑、再对、最后收尾），加七条 §3 没覆盖的判据。判断这次改动是修还是重设计只看一条：要加的特殊分支里出现既有代码和文档都找不到的名词，就是硬接。同一道门连续两次失败，先把两个修法共享的那个前提写成一句话，再开第三个修法，写不出前提就转 `blocked`。剩下五条是让非法状态写不出来、幂等、共享状态单写者、测行为不测实现（所有函数返回空值测试还能过就删）、同一手工活做到第三次才造工具。
+
+7. 文档与代码同一次提交。需求变更先改 `docs/specs/` 的描述与验收标准，再改代码；新建权威文档先查目录索引，建完立刻登记一行。落点是六处：`AGENTS.md` 放红线，`docs/decisions/` 放决策，`docs/memory/` 放记忆，`docs/progress/` 放竣工单，`docs/specs/` 放规格，`docs/design/` 放设计与调研。
 
 ### 第二层：主管 / worker 执行编排
 
@@ -88,6 +90,8 @@
 
 2. 一条规则要能被检验才算规则。"注意代码质量"没法检验，"提交前 ruff、mypy、pytest 全过并贴出本次输出"可以。代价是模糊判断被压成机械判据，偶尔误报，所以给误报留了显式出口。
 
+3. 编码纪律来自 `unclebob/ub-mode`（MIT），只收它 `AGENTS.md` §3 没覆盖的判据，不收它的技能形态。四处没有照搬：它的「最后推到主线」与本仓「合并后不自动 push」相反；它没有记忆、决策与 Ask-first，本仓有，两者是上下游；三个质量门槛工具要装系统级依赖，列为可选；它的日志格式与本仓的 evidence 和竣工单重复，只留「长任务日志随竣工单报」这一层。
+
 ### 第二层：编排从哪来
 
 1. 主管 / worker 照的是 Erlang 的监督树。supervisor 只做三件事：拉起 worker、收它的退出信号、决定重启还是放弃。这里的差别是退出信号要靠消息送出来，通道不可靠就得自己探测，`reconcile` 就是那个探测。三次上限对应重启强度，超了交人。
@@ -119,13 +123,27 @@
 
 ## 四、依赖
 
-编程规范与管理这一层不挑 Agent，也不挑 IDE。编排能力（主管 / worker 模式）有两种跑法，任选其一，用哪个由你定，`init` 只打印命令，本技能不安装任何依赖。
+编程规范与管理这一层不挑 Agent，也不挑 IDE。编排能力（主管 / worker 模式）有两种跑法，任选其一，用哪个由你定，`init` 只打印命令，本技能不安装任何依赖，下面列的可选项也一样。
 
 通用模式在终端里用，靠 hcom 这个命令行工具，任何 CLI 类型的 agent 都能跑，没有 daemon。
 
 Orca 模式在 Orca 里用，通信和事件驱动走 Orca 自己的能力，主管会话必须在 Orca 管辖的终端里启动。
 
-另有一组可选的质量门槛工具：crapper 查复杂度热点、dryer 查结构重复候选、mutator 列变异点与存活数。它们装在机器级 `~/tools/`，属系统级依赖，装不装都不影响骨架运行。装了 `doctor` 的 `quality-tools` 报 OK，没装报 WARN 不报 FAIL，判据退回人工。
+另有一组可选的质量门槛工具，装在机器级 `~/tools/`，属系统级依赖，首次运行自己建 `.venv`：
+
+```bash
+git clone https://github.com/unclebob/crapper ~/tools/crapper
+git clone https://github.com/unclebob/dryer   ~/tools/dryer
+git clone https://github.com/unclebob/mutator ~/tools/mutator
+```
+
+| 工具 | 看什么 | 命令 |
+| --- | --- | --- |
+| crapper | 复杂度热点与 CRAP 分数 | `~/tools/crapper/crapper <目录>...` |
+| dryer | 结构重复候选 | `~/tools/dryer/dryer <目录>...` |
+| mutator | 变异点与存活数 | `~/tools/mutator/mutator --scan <文件>` |
+
+不装也能按 `docs/governance/coding-discipline.md` 的人工判据检查，`doctor` 的 `quality-tools` 报 WARN 不报 FAIL，不影响退出码。两条坑：不传目录时工具会向上找根，可能扫到项目外的文件，一律显式给目录；产物落在 `.metrics/`，要进忽略规则。
 
 控制面脚本 `scripts/foreman.py` 是纯标准库，Python 3.9+ 可跑。
 
