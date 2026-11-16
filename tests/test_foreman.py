@@ -1131,6 +1131,31 @@ class TestEventFlow(TempGitRepoMixin):
         evidence = self.repo.task_dir("T-001") / "evidence" / "escalate-D-001.md"
         self.assertIn("卡住了", evidence.read_text(encoding="utf-8"))
 
+    def test_done_after_ask_moves_to_review(self) -> None:
+        """答复可能不经 reply（主管直接发通道消息），worker 恢复后直接交 DONE：不能拒收。"""
+        self.set_event("[FOREMAN:ASK] task=T-001 dispatch=D-001\n用哪个库？")
+        self.run_events()
+        self.assertEqual(self.repo.load_task("T-001")["status"], "waiting_answer")
+        self.set_event("[FOREMAN:DONE] task=T-001 dispatch=D-001\n自己定了，完成")
+        self.assertEqual(self.run_events(), 0)
+        self.assertEqual(self.repo.load_task("T-001")["status"], "review")
+        self.assertTrue((self.repo.task_dir("T-001") / "evidence" / "done-D-001.md").exists())
+
+    def test_done_blocked_by_gate_is_archived_not_lost(self) -> None:
+        """T3 门未关时 DONE 不许推进（否则绕过人类裁决），但原文必须落盘、日志点名。"""
+        self.assertEqual(foreman.main(["ask", "T-001", "--repo", str(self.root),
+                                       "--question", "允许改 schema？"]), 0)
+        self.assertEqual(self.repo.load_task("T-001")["status"], "waiting_human")
+        self.set_event("[FOREMAN:DONE] task=T-001 dispatch=D-001\n我没等，先做完了")
+        with self.assertRaises(SystemExit):
+            self.run_events()
+        task = self.repo.load_task("T-001")
+        self.assertEqual(task["status"], "waiting_human", "门未关不得推进")
+        ev = self.repo.task_dir("T-001") / "evidence" / "done-D-001.md"
+        self.assertTrue(ev.exists(), "被拒收的 DONE 也必须留原文，不能只留一条报错")
+        self.assertIn("我没等", ev.read_text(encoding="utf-8"))
+        self.assertTrue(any("DONE 被拒收" in x["detail"] for x in task["log"]))
+
     def test_duplicate_done_is_idempotent(self) -> None:
         self.set_event("[FOREMAN:DONE] task=T-001 dispatch=D-001\n完成")
         self.assertEqual(self.run_events(), 0)

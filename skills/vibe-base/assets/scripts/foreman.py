@@ -61,12 +61,19 @@ def progress_rel_for(cfg: dict, task: dict) -> str:
     slug = task.get("slug") or slugify(str(task.get("title") or "task"))
     return f"{docs_paths(cfg)['progress']}/{now_iso()[:10]}-{slug}-{task['id']}.md"
 
+def can_transition(old: str, new: str) -> bool:
+    """这条迁移是否合法（blocked 任何状态都能进：交人是逃生门）。"""
+    return new in (TRANSITIONS.get(old, set()) | ({"blocked"} if new == "blocked" else set()))
+
+
 TRANSITIONS: dict[str, set[str]] = {
     "pending": {"ready", "blocked"},
     "ready": {"dispatched", "blocked"},
     "dispatched": {"running", "blocked"},
     "running": {"waiting_answer", "waiting_human", "review", "failed", "blocked"},
-    "waiting_answer": {"running", "waiting_human", "failed", "blocked"},
+    # review：答复可能不经 `foreman reply`（主管直接用通道命令递答案），worker 恢复后直接交 DONE。
+    # 2026-11-16 实测：状态停在 waiting_answer，DONE 到达即报「非法状态迁移」，把已交付的成果挡在外面。
+    "waiting_answer": {"running", "waiting_human", "review", "failed", "blocked"},
     "waiting_human": {"running", "failed", "blocked"},
     "review": {"merge_ready", "failed", "blocked"},
     # review 不通过会落到 failed；补完测试/验收后要能再审一次。这条边必须有入口，
@@ -437,8 +444,7 @@ class Repo:
         old = task["status"]
         if new_status == old:
             return  # 重复协议消息（如重发 DONE）幂等 no-op
-        allowed = TRANSITIONS.get(old, set()) | ({"blocked"} if new_status == "blocked" else set())
-        if new_status not in allowed:
+        if not can_transition(old, new_status):
             fail(f"非法状态迁移 {old} → {new_status}（任务 {task['id']}）")
         task["status"] = new_status
 
@@ -2297,16 +2303,26 @@ def apply_protocol_event(repo: Repo, cfg: dict, event: dict) -> dict:
                       f"疑跨仓串线，已按协议头 {task_id}/{dispatch_id} 处理")
 
     if ptype == "ASK":
+        # 证据先落盘：状态机一旦拒收，消息已从通道消费掉，没落盘就等于丢
+        save_evidence(repo, task_id, f"ask-{safe_name(dispatch_id)}.md", text)
         repo.set_status(task, "waiting_answer")
         entry = {"dispatch": dispatch_id, "from": sender, "at": now_iso(), "question": text}
         task.setdefault("asks", []).append(entry)
-        save_evidence(repo, task_id, f"ask-{safe_name(dispatch_id)}.md", text)
         repo.log_task(task, "waiting_answer", dref)
         result["status"] = "waiting_answer"
         result["hint"] = "T1 直接答；T2 拍板后 reply；涉及 T3 先 ask 进等待人类"
     elif ptype == "DONE":
+        # 先落证据再迁状态：状态机拒收时消息已经消费掉，没落盘就等于丢（2026-11-16 实测 T-049，
+        # 当时只能手工从 check --all 取原文补登）。补边只去掉一种触发条件，顺序才是根因。
+        ev = save_evidence(repo, task_id, f"done-{safe_name(dispatch_id)}.md", text)
+        # 已经在 review 说明是重发的 DONE（幂等），不算非法迁移
+        if task["status"] != "review" and not can_transition(task["status"], "review"):
+            repo.log_task(task, task["status"],
+                          f"{dref} DONE 被拒收（当前 {task['status']}），原文已存 {ev}")
+            repo.save_task(task)
+            fail(f"任务 {task['id']} 状态为 {task['status']}，DONE 不能推进到 review；"
+                 f"原文已存 {ev}，先处理阻塞（答复 / 裁决）再让它重发 DONE")
         repo.set_status(task, "review")
-        save_evidence(repo, task_id, f"done-{safe_name(dispatch_id)}.md", text)
         repo.log_task(task, "review", f"{dref} 上报完成，待审查")
         result["status"] = "review"
         result["hint"] = "运行 review " + task_id

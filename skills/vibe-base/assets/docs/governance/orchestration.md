@@ -40,6 +40,10 @@ python3 $F report T-001             # 竣工单 → docs/progress/（入库）
 
 中途的 `reply`（答复 ASK）、`ask`（Ask-first 阻塞门）都插在回合二里。
 
+`waiting_answer` 收到 DONE 直接进 `review`：答复可能不经 `reply`（主管用通道命令直接递），worker 恢复后
+直接交活。`waiting_human` 收到 DONE 仍然拒收（未关的人类门不能被一次上报绕过），但 DONE 原文先落 `evidence/`，
+日志点名被拒收，不靠人从通道原文里捞。
+
 - **`events` 是消费唤醒的手段，不是制造等待的手段**。主管空闲时消息自己会叫醒它，主动开窗口只是把自己锁住。
 - 一次 `events` 调用算一轮。**连续两轮空等后 `events` 直接拒绝**（`MAX_EMPTY_WAITS`），要你结束回合；空等超时的输出会提示在 `handoff.md` 运行态写一行「在等什么」。
 - **`events` 每次输出末尾重申等人拍板的事项**（`waiting_human` 任务 + 未关的 gate，带已等时长）。处理 worker 交接时这些事项容易被会话滚走遗忘（2026-11-15 实测），所以由代码每回合拎出来，不靠人的记性。别在 reply 之前开始新的派工循环。
