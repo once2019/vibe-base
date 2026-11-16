@@ -40,16 +40,11 @@ init 会把编排能力一起装进项目，形态是「文档 + 控制面脚本
 ## 安装
 
 ```bash
-# pi
-mkdir -p ~/.pi/agent/skills
-cp -r skills/vibe-base ~/.pi/agent/skills/
-
-# codex
-mkdir -p ~/.codex/skills
-cp -r skills/vibe-base ~/.codex/skills/
+mkdir -p ~/.pi/agent/skills && cp -r skills/vibe-base ~/.pi/agent/skills/     # pi
+mkdir -p ~/.codex/skills   && cp -r skills/vibe-base ~/.codex/skills/        # codex
 ```
 
-无第三方依赖（Python 3.9+ 标准库：控制面用了 `Path.is_relative_to`，脚手架用了内置泛型注解）。三个质量门槛工具是可选项，装在机器级 `~/tools/`，与技能安装无关。回归测试不在技能包内，由维护本技能的仓库运行（仓库根 `tests/`，`python3 -m unittest discover -s tests`，含一条 mypy 门禁；mypy 属 --user 安装的系统级依赖，未装自动跳过该条）。
+无第三方依赖（Python 3.9+ 标准库）。依赖与可选项见 README「四、依赖」，产出清单见「六、开始使用」。回归测试不在技能包内，由维护本技能的仓库跑 `python3 -m unittest discover -s tests`。
 
 ## 红线
 
@@ -60,5 +55,4 @@ cp -r skills/vibe-base ~/.codex/skills/
 
 ## Tradeoff
 
-占位符回填制牺牲"一次填完的完整性"换取冷启动零打断；存量信息丰富的项目可初始化时主动回填，豁免等待。
-把编排能力随骨架一起发（17 个文件，含 1 个控制面脚本）换取"一个技能、一次安装、会话里说一句就能用"；代价是新项目多一个可能不用的脚本，且项目自持副本不随技能升级（重跑 init 默认跳过，需 `--force` 或人工对照）。
+占位符回填制牺牲"一次填完的完整性"换取冷启动零打断；存量信息丰富的项目可初始化时主动回填，豁免等待。其余代价（自持副本不随技能升级、多一个可能不用的脚本）见 README「三、理论支撑与取舍」的对照表。
