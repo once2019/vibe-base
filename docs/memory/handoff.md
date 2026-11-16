@@ -18,7 +18,7 @@
 - 技能包 `skills/vibe-base` 1.2.0：骨架 17 文件（AGENTS.md + 15 docs + `scripts/foreman.py`），回归 198 项
 - 奥卡姆剃刀：§3 一行（141 字符），判据「答不出具体损失就不加」
 - 第一性原理：§3 一行（116 字符），判据「说不出由哪几条约束推出就是照搬」；决策 19 条
-- 待决两项：worktree 自举登记（config 列要软链的文件，默认空）、mutation_check 工具（约 150 行）
+- worktree 自举已落地（config `worktree_links`，默认空，不猜）；mutation_check 经复核不做（留证已由 DONE 承担，变异点发现归 mutator）
 - 控制面：doctor 18 项（含 `decisions-index`、`orchestration-reconcile`、`resource-leaks`、`quality-tools`）
 - 编码纪律细则 `docs/governance/coding-discipline.md`：七条判据 + 三段顺序 + 可选质量门槛
 - `events` 三条输出路径末尾重申 `waiting_human` 与未关 gate，`waiting_answer` 不算

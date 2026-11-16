@@ -10,15 +10,15 @@
 - `events` 三条输出路径末尾重申 `waiting_human` 与未关 gate（带已等分钟数、选项、reply 指令）
 - 技能包版本 1.1.0 → 1.2.0；回归 173 → 198 项
 - README 与 SKILL 按实际能力校正：doctor 18 项、governance 八份细则、unblock 出口、可选质量门槛、安装路径
-- §3「最小代码」改名奥卡姆剃刀，适用范围扩到任何新增；判据只有「删掉会发生什么」
+- §3 两条原则命名：奥卡姆剃刀（删掉会发生什么）与第一性原理（由哪几条约束推出）
 - 编码纪律补「按应用点复制」判据（第二个应用点出现第二份实现即该收敛）
 - 状态机 failed→review 补入口（只加边不开入口等于没修，实测 storyboard dc63e9e）
 - reply 回填 asks[].answered_at；task new 输出范围自检；派工单要求遗留项可派单
 - 纪律两条进 orchestration：收信只走 events、提交叙事按 --stat 核
-- 未做：worktree 自举登记（config）、mutation_check 工具（待独立决策）
-- §3「陈述假设」改名第一性原理，补判据「说出由哪几条约束推出」；细则新增一节归拢三处落点
+- worktree 自举：config `worktree_links` 登记 → dispatch 建树后软链，缺项与未忽略当场告警
+- mutation_check 不做：留证已由 DONE 正文承担，变异点发现已有 mutator
 - 技能文档去重：SKILL 安装与 Tradeoff 散文、两份细则对 §3 的原话复述删掉
-- 决策 19 条；回归 198 → 202 项
+- 决策 19 条（含追记）；回归 198 → 204 项
 
 ## 进行中任务
 

@@ -388,6 +388,9 @@ class Repo:
             "hcom_bin": "hcom",
             # reconcile 扫 inbox 的上限：单 run 消息量超过它才该响 WARN（实测 137 条/单 run）
             "inbox_scan_limit": 400,
+            # 新树自举：主仓里这些路径（.env/.venv 之类，通常被 gitignore）软链进 worktree。
+            # 缺什么因项目而异，只能登记，不能猜；空列表 = 不自举。
+            "worktree_links": [],
             "docs": dict(DEFAULT_DOCS),
         }
         if not self.config_path.exists():
@@ -2134,6 +2137,7 @@ def cmd_dispatch(args: argparse.Namespace) -> int:
     prompt = worker_prompt(cfg, task, dispatch, repo.find_task_dir(task["id"]) / "brief.md")
 
     created_tree = False
+    link_notes: list[str] = []
     if cfg.get("transport") == "orca":
         # Orca 托管隔离：不手工建树，worker-start 自建托管 worktree
         tree_note = (f"{dispatch_id} 复用上一 attempt 的托管树 {prev.get('worktree')}" if is_retry and prev
@@ -2152,6 +2156,7 @@ def cmd_dispatch(args: argparse.Namespace) -> int:
             repo.git("worktree", "add", str(wt), branch)
             tree_note = f"{dispatch_id} 建树 {branch} @ {wt}"
             created_tree = True
+        link_notes = worktree_link_notes(repo, wt, cfg)
 
     prev_status = task["status"]
     repo.set_status(task, "dispatched")
@@ -2176,21 +2181,68 @@ def cmd_dispatch(args: argparse.Namespace) -> int:
         repo.save_task(task)
         raise
     dispatch.update(info)
+    if cfg.get("transport") == "orca" and info.get("worktree"):
+        # Orca 自建托管树：路径只有 worker-start 回执里有，只能启动后补链（worker 可能已跑起来）
+        link_notes = worktree_link_notes(repo, Path(str(info["worktree"])), cfg)
     task["dispatches"].append(dispatch)
     task["attempts"] = dispatch["attempt"]
     repo.set_status(task, "running")
-    repo.log_task(task, "running", f"{dispatch_id} worker={dispatch['worker_handle']}（{agent}{' headless' if args.headless else ''}）")
+    repo.log_task(task, "running", f"{dispatch_id} worker={dispatch['worker_handle']}（{agent}{' headless' if args.headless else ''}）"
+                  + ("；" + "；".join(link_notes) if link_notes else ""))
     repo.save_task(task)
 
     write_text(repo.find_task_dir(task["id"]) / "brief.md", brief_text(cfg, task))
     emit(args, {"id": task["id"], "dispatch": dispatch_id, "worker": dispatch["worker_handle"],
                 "branch": dispatch.get("branch"), "worktree": dispatch["worktree"], "status": task["status"]},
          f"{task['id']} {dispatch_id} 已派工：worker={dispatch['worker_handle']}（{agent}，来自{agent_source}），"
-         f"分支 {dispatch.get('branch')}，worktree {dispatch['worktree']}\n主管现在结束回合，等唤醒（ASK/DONE/ESCALATE）。")
+         f"分支 {dispatch.get('branch')}，worktree {dispatch['worktree']}\n"
+         + (("".join("；" + n + "\n" for n in link_notes)) if link_notes else "")
+         + "主管现在结束回合，等唤醒（ASK/DONE/ESCALATE）。")
     return EXIT_OK
 
 
 # ---------------------------------------------------------------- 命令：events / reply / ask
+
+
+def link_local_deps(repo: Repo, tree: Path, cfg: dict) -> dict:
+    """把主仓的本地配置软链进新树（隔离的代价要配套自举）。
+
+    带什么由 config 的 worktree_links 登记：新树缺 .env/.venv 是通用现象，
+    缺哪个文件是项目知识，猜不得（AGENTS.md §3「不推断未登记的集合」）。
+    只建软链，不执行命令，不给 shell 执行面。
+    """
+    linked: list[str] = []
+    missing: list[str] = []
+    not_ignored: list[str] = []
+    for raw in cfg.get("worktree_links") or []:
+        rel = str(raw).strip().strip("/")
+        if not rel:
+            continue
+        src = repo.root / rel
+        dst = tree / rel
+        if not src.exists():
+            missing.append(rel)
+            continue
+        if dst.exists() or dst.is_symlink():
+            continue  # 重派复用同一棵树：幂等
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.symlink_to(src.resolve())
+        linked.append(rel)
+        if repo.git_try("-C", str(tree), "check-ignore", "-q", rel).returncode != 0:
+            not_ignored.append(rel)  # 没被忽略的软链会被 worker 的 git add 带进提交
+    return {"linked": linked, "missing": missing, "not_ignored": not_ignored}
+
+
+def worktree_link_notes(repo: Repo, tree: Path, cfg: dict) -> list[str]:
+    deps = link_local_deps(repo, tree, cfg)
+    notes: list[str] = []
+    if deps["linked"]:
+        notes.append("已把主仓的 " + ", ".join(deps["linked"]) + " 软链进新树")
+    if deps["missing"]:
+        notes.append("worktree_links 登记了但主仓不存在：" + ", ".join(deps["missing"]))
+    if deps["not_ignored"]:
+        notes.append("软链未被忽略，worker 的 git add 可能把它带进提交：" + ", ".join(deps["not_ignored"]))
+    return notes
 
 
 def save_evidence(repo: Repo, task_id: str, name: str, text: str) -> Path:

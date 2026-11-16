@@ -541,6 +541,43 @@ class TestDispatchReflection(TempGitRepoMixin):
             foreman.main(["task", "unblock", "T-001", "--repo", str(self.root), "--reason", "x"])
 
 
+class TestWorktreeBootstrap(TempGitRepoMixin):
+    """隔离的代价要配套自举：新树缺 .env/.venv 会让第一次验收假红（实测三次手工软链）。"""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.full_task()  # 只建任务，不派工：派工本身是被测对象
+
+    def test_worktree_links_symlink_registered_files(self) -> None:
+        """隔离的代价要配套自举：新树缺 .env/.venv 会让第一次验收假红。"""
+        (self.root / ".env").write_text("TOKEN=1\n", encoding="utf-8")
+        cfg = self.repo.config()
+        cfg["worktree_links"] = [".env"]
+        self.repo.config_path.write_text(json.dumps(cfg), encoding="utf-8")
+
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.dispatch()
+        wt = Path(self.repo.load_task("T-001")["dispatches"][0]["worktree"])
+        self.assertTrue((wt / ".env").is_symlink(), "登记的文件必须软链进新树")
+        self.assertEqual((wt / ".env").read_text(encoding="utf-8"), "TOKEN=1\n")
+        self.assertIn("已把主仓的 .env 软链进新树", out.getvalue())
+
+    def test_worktree_links_report_missing_and_not_ignored(self) -> None:
+        """登记了主仓没有的文件、或软链没被忽略，都要当场说出来，不静默。"""
+        (self.root / "notes.txt").write_text("x\n", encoding="utf-8")  # 未提交也未忽略
+        cfg = self.repo.config()
+        cfg["worktree_links"] = [".env", "notes.txt"]  # 前者不存在，后者没被忽略
+        self.repo.config_path.write_text(json.dumps(cfg), encoding="utf-8")
+
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.dispatch()
+        text = out.getvalue()
+        self.assertIn("登记了但主仓不存在：.env", text)
+        self.assertIn("软链未被忽略", text)
+        self.assertIn("notes.txt", text)
+
 class TestDispatch(TempGitRepoMixin):
     def test_dispatch_creates_tree_and_calls_hcom(self) -> None:
         self.full_task()

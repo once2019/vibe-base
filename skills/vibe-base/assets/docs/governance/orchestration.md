@@ -140,6 +140,10 @@ cherry-pick 还要用）。不结算是僵尸会话：旧 worker 占着树，还
 任务完成或 blocked 后，被淘汰 attempt 的树与分支由 `merge` / `task abandon` 一并清掉，结果记在
 `task["cleanup"]["stale_attempts"]`。
 
+新树是全新检出，缺主仓里被 gitignore 的本地配置（`.env`、`.venv`），第一次验收会假红。要带什么在
+`.vibe/config.json` 的 `worktree_links` 里登记（如 `[".env", ".venv"]`），`dispatch` 建树后按登记软链过去，
+缺项与「软链未被忽略」都会当场报出来。不登记就不猜：缺什么因项目而异。
+
 ### 不派工的场合
 
 见 `orchestration-doctrine.md`。一句话：改一行文案、需求还没想清、需要全程做品味判断、跨仓库改动，直接做更快。
