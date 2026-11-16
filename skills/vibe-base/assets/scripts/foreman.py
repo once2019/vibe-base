@@ -69,7 +69,9 @@ TRANSITIONS: dict[str, set[str]] = {
     "waiting_answer": {"running", "waiting_human", "failed", "blocked"},
     "waiting_human": {"running", "failed", "blocked"},
     "review": {"merge_ready", "failed", "blocked"},
-    "failed": {"dispatched", "blocked"},
+    # review 不通过会落到 failed；补完测试/验收后要能再审一次。这条边必须有入口，
+    # 否则只是表格里的字（2026-11-16 实测：只加边不开入口，等于没修）。
+    "failed": {"dispatched", "blocked", "review"},
     "merge_ready": {"completed", "blocked"},
     "completed": set(),
     "blocked": {"dispatched", "failed"},   # failed=人工解锁（task unblock，重派须带 retry-note）
@@ -1513,7 +1515,8 @@ git diff {base}...HEAD           # 通读每一行：无调试残留、无注释
 
 **第三步：反证一次。** 把本次新增的一个条件取反（或删一条断言），跑测试：如果仍然全绿，说明缺测试，补上再继续；确认转红后还原。
 
-**DONE 正文必须带：** 机械四项结论 + 五轴结论 + 反证结果（取反了什么、哪条测试转红）。每条结论标严重度——`阻断`（不许合并）/ `必须改` / `建议` / `备查`（仅供知会）。主管会独立复跑同样的检查与反证，不采信自报。
+**DONE 正文必须带：** 机械四项结论 + 五轴结论 + 反证结果（取反了什么、哪条测试转红）。
+遗留项写成可直接派单的形态：改哪、验收命令是什么，各一行。写成「后续优化 XX」的遗留项等于没交代。每条结论标严重度——`阻断`（不许合并）/ `必须改` / `建议` / `备查`（仅供知会）。主管会独立复跑同样的检查与反证，不采信自报。
 
 ## 协议
 
@@ -1869,6 +1872,8 @@ def cmd_task_new(args: argparse.Namespace) -> int:
         notes_out.append("注意：未定义验收命令，dispatch 前用 task set-acceptance 补上")
     if items:
         notes_out.append(f"{len(items)} 个子项逐项验收")
+    notes_out.append("范围自检：goal 里提到的每个落点都在 --scope 里吗？漏了 worker 只能撞 scope 门发 ASK，"
+                     "比事先扩范围贵一轮（2026-11-16 实测两单）")
     for acc in [*(a for a in (args.accept or [])), *([items_acceptance] if items_acceptance else [])]:
         hint = shell_hint(acc)
         if hint:
@@ -2525,6 +2530,9 @@ def cmd_reply(args: argparse.Namespace) -> int:
                 task["docs"]["decisions"].append(rel)
     else:
         task.setdefault("decisions", []).append({"level": "T2", "at": now_iso(), "note": args.body})
+    # asks[] 记「问过」，答复也要记「答过」：只写不答的账，人读 task.json 会以为还在等。
+    if task.get("asks") and not task["asks"][-1].get("answered_at"):
+        task["asks"][-1].update(answered_at=now_iso(), answer=args.body)
     repo.set_status(task, "running")
     repo.log_task(task, "running", f"ANSWER → {target['id']}（{'T3 人类裁决' if was_human_gate else 'T2 主管裁决'}）：{args.body[:80]}")
     repo.save_task(task)
@@ -2678,8 +2686,11 @@ def cmd_review(args: argparse.Namespace) -> int:
     cfg = effective_config(repo)
     assert_coordinator(repo, cfg)
     task = repo.load_task(args.task_id)
-    if task["status"] != "review":
-        fail(f"任务 {task['id']} 状态为 {task['status']}，只有收到 DONE（review）后可审查")
+    if task["status"] not in ("review", "failed"):
+        fail(f"任务 {task['id']} 状态为 {task['status']}，只有收到 DONE（review）或审查未通过（failed）后可审查")
+    if task["status"] == "failed":
+        repo.set_status(task, "review")
+        repo.log_task(task, "review", "审查未通过后补完修复，再审一次")
     dispatch = task["dispatches"][-1]
     wt = Path(dispatch["worktree"])
     if not wt.exists():

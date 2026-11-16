@@ -5,7 +5,7 @@
 > 规则与预算见 AGENTS.md §5（交接知识/运行态分区｜≤60 行且单行 ≤150 字符｜失效运行态条目更新时清除）。
 
 - 撰写时间：2026-11-15
-- 交接原因：奥卡姆剃刀与第一性原理已命名进 §3；技能包自身文档按剃刀去重
+- 交接原因：storyboard 回流六点已按第一性原理分档处理，四项落地两项待决
 
 ## 运行态（失效即删；每条必须带失效条件）
 
@@ -17,7 +17,8 @@
 
 - 技能包 `skills/vibe-base` 1.2.0：骨架 17 文件（AGENTS.md + 15 docs + `scripts/foreman.py`），回归 198 项
 - 奥卡姆剃刀：§3 一行（141 字符），判据「答不出具体损失就不加」
-- 第一性原理：§3 一行（116 字符），判据「说不出由哪几条约束推出就是照搬」；决策 18 条
+- 第一性原理：§3 一行（116 字符），判据「说不出由哪几条约束推出就是照搬」；决策 19 条
+- 待决两项：worktree 自举登记（config 列要软链的文件，默认空）、mutation_check 工具（约 150 行）
 - 控制面：doctor 18 项（含 `decisions-index`、`orchestration-reconcile`、`resource-leaks`、`quality-tools`）
 - 编码纪律细则 `docs/governance/coding-discipline.md`：七条判据 + 三段顺序 + 可选质量门槛
 - `events` 三条输出路径末尾重申 `waiting_human` 与未关 gate，`waiting_answer` 不算

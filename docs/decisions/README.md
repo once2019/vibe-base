@@ -24,3 +24,4 @@
 - 2026-11-15｜技能库｜[回流派发反思](2026-11-15-reflow-dispatch-reflection.md)｜已生效｜重派结算上一 worker、task unblock、inbox_scan_limit、scope 外路径提醒回流；修正原实现四处缺陷；worker 名字带 attempt
 - 2026-11-15｜治理｜[奥卡姆剃刀作为 §3 的命名原则](2026-11-15-occam-razor-as-named-principle.md)｜已生效｜「只写解决问题的最小代码」改名并扩到任何新增：先答删掉会发生什么；判据只有一条，不派生第二套清单
 - 2026-11-15｜治理｜[第一性原理进 §3](2026-11-15-first-principles-in-section-3.md)｜已生效｜设计结论要能说出由哪几条约束推出，说不出就是照搬惯例；与「陈述假设」合并成一行；细则归拢已有的三处落点并划清与跟随惯例的边界
+- 2026-11-16｜技能库｜[派工与状态机的四处补漏](2026-11-16-dispatch-and-state-machine-gaps.md)｜已生效｜failed→review 必须有入口否则等于没修；asks 回填答复时间；task new 范围自检；遗留项可派单；收信只走 events、提交叙事按 --stat 核

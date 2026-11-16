@@ -275,6 +275,14 @@ class TestInitAndTask(TempGitRepoMixin):
         self.assertNotEqual(a, b)
         self.assertTrue(a.startswith("docs/progress/"))
 
+    def test_task_new_reminds_scope_self_check(self) -> None:
+        """范围漏项只能在派工前提醒：worker 撞 scope 门要赔一轮往返。"""
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(foreman.main(["task", "new", "--repo", str(self.root),
+                                           "--title", "实现 Y", "--accept", "true"]), 0)
+        self.assertIn("范围自检", out.getvalue())
+
     def test_uninitialized_repo_gives_readable_error(self) -> None:
         """未 init 时不能抛 traceback：控制面命令必须给可执行提示（新项目首触点）。"""
         self.repo.config_path.unlink()
@@ -657,6 +665,41 @@ class TestEventFlow(TempGitRepoMixin):
         self.assertNotEqual(cm.exception.code, 0)
         self.assertFalse(list((self.root / "docs" / "progress").glob("*-T-001.md")),
                          "未 completed 不应落竣工单")
+
+    def test_review_after_failed_runs_again(self) -> None:
+        """审查不通过落到 failed 后必须能再审：状态机的边要有入口，否则只能手改 task.json。"""
+        wt = Path(self.repo.load_task("T-001")["dispatches"][0]["worktree"])
+        (wt / "README.md").write_text("越界\n", encoding="utf-8")
+        self.commit_in(wt, "oos")
+        self.set_event("[FOREMAN:DONE] task=T-001 dispatch=D-001\n完成")
+        self.run_events()
+        foreman.main(["review", "T-001", "--repo", str(self.root)])
+        self.assertEqual(self.repo.load_task("T-001")["status"], "failed")
+
+        # 修完（这里用扩 scope 模拟）直接再审，不必重派
+        self.assertEqual(foreman.main(["task", "set-scope", "T-001", "--repo", str(self.root),
+                                       "--scope", "src/", "--scope", "README.md"]), 0)
+        self.assertEqual(foreman.main(["review", "T-001", "--repo", str(self.root), "--json"]), 0)
+        task = self.repo.load_task("T-001")
+        self.assertEqual(task["status"], "merge_ready")
+        self.assertTrue(any("再审一次" in x["detail"] for x in task["log"]))
+
+    def test_reply_marks_ask_answered(self) -> None:
+        """asks[] 记「问过」也要记「答过」：只写不答的账，人读 task.json 会以为还在等。"""
+        self.set_event("[FOREMAN:ASK] task=T-001 dispatch=D-001\n用哪个库？")
+        self.run_events()
+        self.assertFalse(self.repo.load_task("T-001")["asks"][-1].get("answered_at"))
+        self.assertEqual(foreman.main(["reply", "T-001", "--repo", str(self.root),
+                                       "--body", "选 A"]), 0)
+        ask = self.repo.load_task("T-001")["asks"][-1]
+        self.assertTrue(ask.get("answered_at"), "答复后 asks[] 必须留答复时间")
+        self.assertEqual(ask.get("answer"), "选 A")
+
+    def test_brief_requires_actionable_leftovers(self) -> None:
+        """遗留项写成可直接派单的形态：只写「后续优化 XX」等于没交代。"""
+        brief = (self.repo.task_dir("T-001") / "brief.md").read_text(encoding="utf-8")
+        self.assertIn("遗留项写成可直接派单的形态", brief)
+        self.assertIn("改哪、验收命令是什么", brief)
 
     def test_retry_without_note_is_refused(self) -> None:
         """重派必须写清这次改了什么：原样重派只会再失败一次。"""
