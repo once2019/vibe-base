@@ -60,17 +60,17 @@
 
 4. 完成定义先于实现。`task new` 两条硬判据：`--scope` 必须列路径，`--accept` 必须是一条可执行命令。写不出验收命令说明需求还没想清。`review` 跑六项检查：越界（`scope`）、密钥（`secrets`）、跳测痕迹（`no-skip`）、空改动（`non-empty`）、验收复跑（`acceptance`）、决策记录（`docs-decisions`），输出存进 `evidence/`，`merge` 之后在主干再跑一次。
 
-5. 异步回合。回合一做体检、建任务、派工，做完就结束回合，不 sleep 不开等待窗口。worker 请示或完成时发消息，通道把主管叫醒，进入回合二跑 `events`。一次 `events` 调用算一轮，连续两轮空等后第三次直接拒绝。
+5. 异步回合。回合一做体检、建任务、派工，做完就结束回合，不 sleep 不开等待窗口。worker 请示或完成时发消息，通道把主管叫醒，进入回合二跑 `events`。一次 `events` 调用算一轮，连续两轮空等后第三次直接拒绝。每次 `events` 输出末尾都重申还在等人拍板的事项，处理 worker 交接时不会把它们滚忘。
 
 6. 请示与上报是一套固定协议。主、子 Agent 模式缺的就是这条回传路径。worker 只能发三种消息：`ASK`（附问题、选项、推荐项，不许猜）、`DONE`（附摘要、改动文件、自审结论、验证输出、提交）、`ESCALATE`（附已试方案和阻塞点）。发 DONE 前必须自审三样：机械四项（范围、验收、无跳过、无密钥）、五轴过一遍自己的 diff、反证一次。主管按同样口径复核，不采信自报。
 
 7. 并行与批次由代码判定。`dispatch` 比对在跑任务的 scope，相交就拒绝并列出那一对路径，确要重叠加 `--allow-overlap`。有顺序依赖的一串子项整批派给一个 worker，同一棵树里逐项做，每项一个 commit 和一份验收证据，主管只在整批结束时审一次。`--depends-on` 让前置未完成的任务无法派工，它只做门槛，不建 DAG。
 
-8. 失败之后怎么走。一个任务最多派三次，前两次修完重新派工，worker 在同一棵树上接着改，主管看累计 diff；第三次进 `blocked` 交人。重派必须写 `--retry-note` 说明这次改了什么，不带直接拒绝。合并后复跑不过就停在 `merge_ready`，由人决定回退还是修复。
+8. 失败之后怎么走。一个任务最多派三次，前两次修完重新派工，worker 在同一棵树上接着改，主管看累计 diff；第三次进 `blocked` 交人。重派必须写 `--retry-note` 说明这次改了什么，不带直接拒绝。`blocked` 有出口：`task unblock --reason` 说清根因后回到可派工，重派仍要 `--retry-note`；判断根因不在实现层、要重走满三次时加 `--reset-attempts`。合并后复跑不过就停在 `merge_ready`，由人决定回退还是修复。
 
 9. 谁能干谁干。跨模块、要读多处既有实现、要判断设计取舍的，给能力强的 agent；机械替换、改文案、补测试，给便宜快的。
 
-10. 命令都走一个纯标准库脚本 `scripts/foreman.py`：`doctor` 体检、`init` 建骨架、`task new` 建任务、`dispatch` 派工、`events` 收协议消息、`reply` 答复、`ask` 立阻塞门、`review` 审 diff 与验收、`merge` 合并归档、`report` 出竣工单、`reconcile` 对账。
+10. 命令都走一个纯标准库脚本 `scripts/foreman.py`：`doctor` 体检、`init` 建骨架、`task new` 建任务、`dispatch` 派工、`events` 收协议消息、`reply` 答复、`ask` 立阻塞门、`review` 审 diff 与验收、`merge` 合并归档（连同淘汰 attempt 的树与分支）、`report` 出竣工单、`reconcile` 对账、`task unblock` 人工解锁、`task abandon` 放弃派工。
 
 ### 两层合起来才成立的地方
 
@@ -125,6 +125,10 @@
 
 Orca 模式在 Orca 里用，通信和事件驱动走 Orca 自己的能力，主管会话必须在 Orca 管辖的终端里启动。
 
+另有一组可选的质量门槛工具：crapper 查复杂度热点、dryer 查结构重复候选、mutator 列变异点与存活数。它们装在机器级 `~/tools/`，属系统级依赖，装不装都不影响骨架运行。装了 `doctor` 的 `quality-tools` 报 OK，没装报 WARN 不报 FAIL，判据退回人工。
+
+控制面脚本 `scripts/foreman.py` 是纯标准库，Python 3.9+ 可跑。
+
 ## 五、什么时候用
 
 适合这几种情况：
@@ -148,11 +152,14 @@ Orca 模式在 Orca 里用，通信和事件驱动走 Orca 自己的能力，主
 ## 六、开始使用
 
 ```bash
-mkdir -p ~/.agent/skills
-cp -r skills/vibe-base ~/.agent/skills/
+mkdir -p ~/.pi/agent/skills          # pi
+cp -r skills/vibe-base ~/.pi/agent/skills/
+
+mkdir -p ~/.codex/skills             # codex
+cp -r skills/vibe-base ~/.codex/skills/
 ```
 
-装好之后，新项目里说一句「初始化项目治理」或「init AGENTS」。产出 17 个文件（1 份 `AGENTS.md`、15 份 docs、1 个 `scripts/foreman.py`），外加空的 `.vibe/` 骨架和忽略规则。幂等，不覆盖已有文件；占位符不追问，agent 在后续开发中自己回填。初始化之后技能可以删掉。
+装好之后，新项目里说一句「初始化项目治理」或「init AGENTS」。产出 17 个文件（1 份 `AGENTS.md`、15 份 docs、1 个 `scripts/foreman.py`），外加 `.vibe/` 骨架和忽略规则。忽略规则写进 `.git/info/exclude`，不随仓库分发，所以每个克隆各自跑一次 `init`，否则 `.vibe/` 的状态文件会进提交。幂等，不覆盖已有文件；占位符不追问，agent 在后续开发中自己回填。初始化之后技能可以删掉。
 
 `init` 之后先做三件事：填掉 `AGENTS.md` 里测试、lint、类型检查三条命令，给第一个任务写一条真能跑的验收命令，跑一次 `doctor` 修红项。记忆和决策库随开发长起来，编排在第一次真要并行时再启用。
 

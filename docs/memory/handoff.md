@@ -5,7 +5,7 @@
 > 规则与预算见 AGENTS.md §5（交接知识/运行态分区｜≤60 行且单行 ≤150 字符｜失效运行态条目更新时清除）。
 
 - 撰写时间：2026-11-15
-- 交接原因：ub-mode 编码纪律已吸收并验证；技能 README 六节定稿
+- 交接原因：events 每回合重申待拍板事项已落地；README 与 SKILL 按实际能力校正
 
 ## 运行态（失效即删；每条必须带失效条件）
 
@@ -15,9 +15,10 @@
 
 ## 当前状态（历史见 docs/progress/ 与 docs/decisions/）
 
-- 技能包 `skills/vibe-base` 1.1.0：骨架 17 文件（AGENTS.md + 15 docs + `scripts/foreman.py`），回归 173 项
+- 技能包 `skills/vibe-base` 1.2.0：骨架 17 文件（AGENTS.md + 15 docs + `scripts/foreman.py`），回归 198 项
 - 控制面：doctor 18 项（含 `decisions-index`、`orchestration-reconcile`、`resource-leaks`、`quality-tools`）
 - 编码纪律细则 `docs/governance/coding-discipline.md`：六条判据 + 三段顺序 + 可选质量门槛
+- `events` 三条输出路径末尾重申 `waiting_human` 与未关 gate，`waiting_answer` 不算
 - 未完成清单：空
 
 ## 关键决策引用
