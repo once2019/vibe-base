@@ -21,7 +21,7 @@
 - `reject` 已加：review/merge_ready → failed，`--note` 必填，原文进日志
 - worktree 自举已落地（config `worktree_links`，默认空，不猜）；mutation_check 经复核不做（留证已由 DONE 承担，变异点发现归 mutator）
 - 控制面：doctor 18 项（含 `decisions-index`、`orchestration-reconcile`、`resource-leaks`、`quality-tools`）
-- 编码纪律细则 `docs/governance/coding-discipline.md`：七条判据 + 三段顺序 + 可选质量门槛
+- 编码纪律细则 `coding-discipline.md`：八条判据 + 三段顺序 + 单会话审查口径 + 可选质量门槛
 - `events` 三条输出路径末尾重申 `waiting_human` 与未关 gate，`waiting_answer` 不算
 - 未完成清单：空
 
