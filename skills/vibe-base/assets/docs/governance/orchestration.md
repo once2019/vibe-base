@@ -30,6 +30,7 @@ python3 $F dispatch T-001           # 建 worktree/分支并拉起 worker → �
 # 回合二：被通道唤醒后（终端出现 "You have 1 orchestration message"）才跑
 python3 $F events --timeout 300     # 消费这一条：落 evidence、推进状态机
 python3 $F review T-001             # DONE → 审 diff + 跑验收 + 存证据
+python3 $F reject T-001 --note "五轴读出的必须改项"   # 五轴不过：review/merge_ready → failed
 python3 $F merge T-001              # --no-ff 合并 + 复跑验收 + 删树 + 归档
 python3 $F report T-001             # 竣工单 → docs/progress/（入库）
 # merge 内含资源回收：worktree / 分支 / worker / orchestration task
@@ -202,6 +203,10 @@ cherry-pick 还要用）。不结算是僵尸会话：旧 worker 占着树，还
 | 性能 | 没有 N+1、无界循环、热路径新建大对象 |
 
 **必须做一次反证**：取反本次新增的一个条件（或删一条断言），确认对应测试转红再还原。全绿说明缺测试，补测试前不许 merge——这是"测试真的测到本次改动"的唯一证据。
+
+五轴读出「必须改」而机械检查全绿时，用 `reject <任务> --note "<要改什么>"` 打回：`review` / `merge_ready`
+都能打回（`review` 先跑、再读 diff 是常态，那时状态已经是 `merge_ready`），状态落 `failed`，裁决原文进事件
+日志，重派时把它写进 `--retry-note`。没有这道口子，主管只能手改 `task.json`（2026-11-16 实测两次）。
 
 提交叙事按 `git log --stat` 核：一条提交的信息与实际改动不符（docs 提交里夹带 `scripts/` 改动）会让人按信息判断影响面时漏看，属`必须改`。
 

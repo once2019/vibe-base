@@ -72,7 +72,7 @@
 
 9. 谁能干谁干。跨模块、要读多处既有实现、要判断设计取舍的，给能力强的 agent；机械替换、改文案、补测试，给便宜快的。
 
-10. 命令都走一个纯标准库脚本 `scripts/foreman.py`：`doctor` 体检、`init` 建骨架、`task new` 建任务、`dispatch` 派工、`events` 收协议消息、`reply` 答复、`ask` 立阻塞门、`review` 审 diff 与验收、`merge` 合并归档（连同淘汰 attempt 的树与分支）、`report` 出竣工单、`reconcile` 对账、`task unblock` 人工解锁、`task abandon` 放弃派工。
+10. 命令都走一个纯标准库脚本 `scripts/foreman.py`：`doctor` 体检、`init` 建骨架、`task new` 建任务、`dispatch` 派工、`events` 收协议消息、`reply` 答复、`ask` 立阻塞门、`review` 审 diff 与验收、`reject` 打回（五轴不过时）、`merge` 合并归档（连同淘汰 attempt 的树与分支）、`report` 出竣工单、`reconcile` 对账、`task unblock` 人工解锁、`task abandon` 放弃派工。
 
 ### 两层合起来才成立的地方
 

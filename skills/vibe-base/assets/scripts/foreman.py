@@ -72,7 +72,8 @@ TRANSITIONS: dict[str, set[str]] = {
     # review 不通过会落到 failed；补完测试/验收后要能再审一次。这条边必须有入口，
     # 否则只是表格里的字（2026-11-16 实测：只加边不开入口，等于没修）。
     "failed": {"dispatched", "blocked", "review"},
-    "merge_ready": {"completed", "blocked"},
+    # 五轴是在 review 报全绿之后读的，那时状态已是 merge_ready；不能打回就等于审查白读。
+    "merge_ready": {"completed", "blocked", "failed"},
     "completed": set(),
     "blocked": {"dispatched", "failed"},   # failed=人工解锁（task unblock，重派须带 retry-note）
 }
@@ -2742,6 +2743,32 @@ def build_items(titles: list[str] | None, accepts: list[str] | None) -> tuple[li
     return items, " && ".join(as_)
 
 
+def cmd_reject(args: argparse.Namespace) -> int:
+    """主管审查不通过（质量原因，不是验收红）：review/merge_ready → failed，记裁决原文。
+
+    存在理由：`review` 只在机械检查或验收红时自己落 failed，五轴读出的「必须改」没有落点，
+    只能手改 task.json（2026-11-16 实测两次）。状态收两个：review（读完再跑 review）与
+    merge_ready（review 先跑、再读 diff，这是常态）。裁决原文进事件日志，重派时用
+    `dispatch --retry-note` 把要改什么交给下一次 attempt。
+    """
+    repo = Repo(Path(args.repo))
+    cfg = effective_config(repo)
+    assert_coordinator(repo, cfg)
+    task = repo.load_task(args.task_id)
+    if task["status"] not in ("review", "merge_ready"):
+        fail(f"任务 {task['id']} 状态为 {task['status']}，只有 review / merge_ready 可裁决不通过")
+    if not (args.note or "").strip():
+        fail("必须写 --note：说清要改什么（进事件日志，也是重派 --retry-note 的依据）")
+    prev = task["status"]
+    repo.set_status(task, "failed")
+    repo.log_task(task, "failed", f"审查不通过（主管裁决，自 {prev}）：{args.note.strip()}")
+    repo.save_task(task)
+    emit(args, {"id": task["id"], "status": task["status"], "from": prev, "note": args.note.strip()},
+         f"{task['id']} {prev} → failed（审查不通过）：{args.note.strip()}\n"
+         f"修正后用 dispatch {task['id']} --retry-note '<要点>' 重派（failed 可直接重派，也能 review 再审）。")
+    return EXIT_OK
+
+
 def cmd_review(args: argparse.Namespace) -> int:
     repo = Repo(Path(args.repo))
     cfg = effective_config(repo)
@@ -3192,6 +3219,13 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--repo", default=".")
     add_json(sp)
     sp.set_defaults(func=cmd_review)
+
+    sp = sub.add_parser("reject", help="审查不通过（质量原因）：review/merge_ready → failed，记裁决原文")
+    sp.add_argument("task_id")
+    sp.add_argument("--note", required=True, help="要改什么（进事件日志，也是重派 retry-note 的依据）")
+    sp.add_argument("--repo", default=".")
+    add_json(sp)
+    sp.set_defaults(func=cmd_reject)
 
     sp = sub.add_parser("merge", help="--no-ff 合并、复跑验收、删树、归档")
     sp.add_argument("task_id")

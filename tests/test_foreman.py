@@ -767,6 +767,51 @@ class TestEventFlow(TempGitRepoMixin):
         self.assertTrue(ask.get("answered_at"), "答复后 asks[] 必须留答复时间")
         self.assertEqual(ask.get("answer"), "选 A")
 
+    def test_reject_after_review_passes(self) -> None:
+        """五轴是在 review 报全绿之后读的：那时状态已是 merge_ready，打回必须走得通。"""
+        wt = Path(self.repo.load_task("T-001")["dispatches"][0]["worktree"])
+        (wt / "src" / "feature.txt").write_text("done\n", encoding="utf-8")
+        self.commit_in(wt, "feat: x")
+        self.set_event("[FOREMAN:DONE] task=T-001 dispatch=D-001\n完成")
+        self.run_events()
+        self.assertEqual(foreman.main(["review", "T-001", "--repo", str(self.root)]), 0)
+        self.assertEqual(self.repo.load_task("T-001")["status"], "merge_ready")
+
+        self.assertEqual(foreman.main(["reject", "T-001", "--repo", str(self.root),
+                                       "--note", "判据写了两份，收成一处"]), 0)
+        task = self.repo.load_task("T-001")
+        self.assertEqual(task["status"], "failed")
+        self.assertTrue(any("判据写了两份，收成一处" in x["detail"] for x in task["log"]),
+                        "裁决原文必须进事件日志，否则重派时无据可依")
+
+        # failed 可直接重派，retry-note 把要改什么交给下一次 attempt
+        self.dispatch(["--retry-note", "判据收成一处"])
+        self.assertEqual(self.repo.load_task("T-001")["status"], "running")
+
+    def test_reject_requires_note(self) -> None:
+        """没有裁决原文的驳回等于没驳回：重派时无据可依。"""
+        self.set_event("[FOREMAN:DONE] task=T-001 dispatch=D-001\n完成")
+        self.run_events()
+        self.assertEqual(self.repo.load_task("T-001")["status"], "review")
+        with self.assertRaises(SystemExit):
+            foreman.main(["reject", "T-001", "--repo", str(self.root), "--note", "   "])
+        self.assertEqual(self.repo.load_task("T-001")["status"], "review", "缺原文不得改状态")
+
+    def test_reject_refuses_outside_review(self) -> None:
+        """worker 还在干活时不能驳回：那时没有可审的产物。"""
+        with self.assertRaises(SystemExit):
+            foreman.main(["reject", "T-001", "--repo", str(self.root), "--note", "x"])
+        self.assertEqual(self.repo.load_task("T-001")["status"], "running")
+
+    def test_reject_from_review_before_running_review(self) -> None:
+        """读完 diff 再跑 review 的次序也要支持：review 态能打回。"""
+        self.set_event("[FOREMAN:DONE] task=T-001 dispatch=D-001\n完成")
+        self.run_events()
+        self.assertEqual(self.repo.load_task("T-001")["status"], "review")
+        self.assertEqual(foreman.main(["reject", "T-001", "--repo", str(self.root),
+                                       "--note", "结构问题"]), 0)
+        self.assertEqual(self.repo.load_task("T-001")["status"], "failed")
+
     def test_reply_marks_ask_of_that_dispatch(self) -> None:
         """迟到的答复不能记到别的 attempt 的请示上：按 dispatch 配对。"""
         self.set_event("[FOREMAN:ASK] task=T-001 dispatch=D-001\n第一次请示")
