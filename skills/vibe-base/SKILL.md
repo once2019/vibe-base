@@ -28,7 +28,7 @@ description: 初始化项目的 vibe coding 治理体系，并把「规划与实
 
 ## 执行编排块（规划与实施分离）
 
-init 会把编排能力一起装进项目，形态是「文档 + 控制面脚本 + `.vibe/` 骨架（`config.json` 与忽略规则）」。能力默认休眠：不派工、不探测编排通道、不派生 agent。
+init 会把编排能力一起装进项目，形态是「文档 + 控制面脚本 + `.vibe/` 骨架（`config.json` 与忽略规则）」。能力常备、默认不派工：判断是否启用看有没有在跑的任务，没有就不探测编排通道、不派生 agent。
 
 - 触发：人类在会话里说「用规划与实施分离把 X 落地」「派 worker 去做」「并行推进这几件事」。
 - 入口：项目内 `docs/governance/orchestration.md`（条文正本，含命令序列、落点分工、决策档位）。
@@ -50,7 +50,7 @@ mkdir -p ~/.codex/skills   && cp -r skills/vibe-base ~/.codex/skills/        # c
 
 - 模板固有规则（三层记忆协议、双预算、Ask-first 机制、验证留证、安全红线、行为与沟通红线）不得裁剪或弱化，只允许替换占位符与增补项目特定条目。
 - `AGENTS.md` 唯一事实来源，不得在其他文档复述其规则。
-- 编排块默认休眠：init 只备骨架（`.vibe/` 目录、`config.json`、忽略规则），不装通道、不跑 doctor、不派工；只有人类明确要求时才启用。
+- 编排块默认不派工：init 只备骨架（`.vibe/` 目录、`config.json`、忽略规则），不装通道、不跑 doctor；判据看有没有在跑的任务，没有就不探测通道。
 - 编排块一旦启用，状态变更只经 `scripts/foreman.py`，不手工编辑 `.vibe/` 下的状态与证据。
 
 ## Tradeoff
