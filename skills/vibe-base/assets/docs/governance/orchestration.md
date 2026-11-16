@@ -192,7 +192,9 @@ cherry-pick 还要用）。不结算是僵尸会话：旧 worker 占着树，还
 
 `review` 六项：`scope`（越界）、`secrets`、`no-skip`（跳测试/`--no-verify` 痕迹）、`non-empty`、`acceptance`（复跑）、`docs-decisions`（决策记录）。前五项可自动判定，第六项是治理门槛。
 
-项目自己的「环境依赖跳过」惯例（如 `pytest.skip("需要 node 18")`）写进 `.vibe/config.json` 的 `skip_allowlist`（正则列表），命中即放行。放行项照报不静默：`review` 会写「N 条按 skip_allowlist 放行」，原文进 `task["review"]["allowed_skips"]`。`secrets` 不参与放行。放行清单必须留在 config 里，不写进脚本：脚本是会被同步覆盖的副本，项目约定写进去就会随同步消失（2026-11-16 实测：整文件覆盖同步抹掉窄放行，此后所有按惯例写的冒烟守卫都被误判不过）。
+声明环境前置的跳过（`pytest.skip("需要 node 18 才能跑冒烟")  # env-skip`）放行，其余跳过与 `--no-verify` 照拦。标记 `env-skip` 写在被审代码里，所以它随仓库分发、diff 里看得见、工具同步覆盖不到；放行项照报不静默（`review` 写「N 条带 env-skip 标记」，原文进 `task["review"]["allowed_skips"]`）。`secrets` 不参与放行。
+
+不要把这套放行规则写进脚本常量，也不要放进 `.vibe/config.json`：脚本会被整文件同步覆盖（2026-11-16 实测：一次同步抹掉窄放行，此后所有按惯例写的冒烟守卫都被误判不过），而 `.vibe/` 不入库，放行规则只活在一台机器上。
 
 自动全绿只证明"没有明显犯规"，不证明"对且值这个复杂度"。主管按五轴读 diff：
 

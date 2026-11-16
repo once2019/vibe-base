@@ -89,6 +89,11 @@ SECRET_PATTERNS = [
     ("assigned credential", re.compile(r"(?i)(password|secret|token)\s*[:=]\s*['\"][^'\"]{8,}")),
 ]
 
+# 环境前置跳过必须自带标记：`pytest.skip("需要 node …")  # env-skip`。
+# 标记写在被审代码里，所以它随仓库分发、diff 里看得见、工具同步覆盖不到。
+# 不用 config 清单：.vibe 不入库，放行规则只活在一台机器上，等于把同一个病换个地方。
+ENV_SKIP_MARKER = "env-skip"
+
 SKIP_MARKERS = [
     "--no-verify",
     "pytest.skip",
@@ -392,9 +397,7 @@ class Repo:
             # 新树自举：主仓里这些路径（.env/.venv 之类，通常被 gitignore）软链进 worktree。
             # 缺什么因项目而异，只能登记，不能猜；空列表 = 不自举。
             "worktree_links": [],
-            # 审查门 no-skip 的放行正则（项目自己的「环境依赖跳过」惯例，如 pytest.skip("需要 node")）。
-            # 放行项照报不静默；空列表 = 任何跳过都拦。项目知识进 config，不进会被同步覆盖的脚本。
-            "skip_allowlist": [],
+
             "docs": dict(DEFAULT_DOCS),
         }
         if not self.config_path.exists():
@@ -2647,23 +2650,11 @@ def in_scope(rel: str, scope: list[str]) -> bool:
     return any(rel == s or rel.startswith(s.rstrip("/") + "/") for s in scope)
 
 
-def compile_skip_allowlist(patterns: list[str] | None) -> list[re.Pattern[str]]:
-    """把 config.skip_allowlist 编译成正则；写错当场报，不静默失效。"""
-    out: list[re.Pattern[str]] = []
-    for raw in patterns or []:
-        try:
-            out.append(re.compile(str(raw)))
-        except re.error as exc:
-            fail(f"skip_allowlist 里的正则写错了：{raw!r}（{exc}）")
-    return out
-
-
-def scan_added_lines(diff_text: str,
-                     allow: list[re.Pattern[str]] | None = None) -> tuple[list[str], list[str], list[str]]:
+def scan_added_lines(diff_text: str) -> tuple[list[str], list[str], list[str]]:
     """扫描 diff 新增行：返回 (secret_hits, skip_hits, allowed_skips)。
 
-    放行项单独返回而不是丢掉：审查要看得到「哪几行被放过去了」，否则放行等于失明。
-    密钥不参与放行——凭据没有「环境依赖」这种正当理由。
+    带 `env-skip` 标记的跳过放行，但单独返回而不是丢掉：审查要看得到「哪几行被放过去了」，
+    否则放行等于失明。密钥不参与放行——凭据没有「环境依赖」这种正当理由。
     """
     secrets: list[str] = []
     skips: list[str] = []
@@ -2678,7 +2669,7 @@ def scan_added_lines(diff_text: str,
         # 每行只判一次：SKIP_MARKERS 有嵌套子串（pytest.skip 里含 test.skip( 与 t.skip(），
         # 逐个 marker 计会把一行数成三行，[:5] 截断后就看不到真正的第二处违规。
         if any(marker in body for marker in SKIP_MARKERS):
-            if any(p.search(body) for p in allow or []):
+            if ENV_SKIP_MARKER in body:
                 allowed.append(body.strip()[:80])
             else:
                 skips.append(body.strip()[:80])
@@ -2811,8 +2802,7 @@ def cmd_review(args: argparse.Namespace) -> int:
     names, full_diff, shortstat = diff_vs_base(repo, cfg["base"], wt)
     files = [n for n in names.splitlines() if n.strip()]
     out_scope = [f for f in files if not in_scope(f, task.get("scope", []))]
-    secrets, skips, allowed_skips = scan_added_lines(
-        full_diff, compile_skip_allowlist(cfg.get("skip_allowlist")))
+    secrets, skips, allowed_skips = scan_added_lines(full_diff)
 
     checks = [
         {"name": "scope", "ok": not out_scope,
@@ -2821,7 +2811,7 @@ def cmd_review(args: argparse.Namespace) -> int:
         {"name": "no-skip", "ok": not skips,
          "detail": ("; ".join(skips[:5]) if skips
                     else "未发现跳测试/--no-verify 痕迹"
-                    + (f"（{len(allowed_skips)} 条按 skip_allowlist 放行）" if allowed_skips else ""))},
+                    + (f"（{len(allowed_skips)} 条带 env-skip 标记，按环境前置放行）" if allowed_skips else ""))},
         {"name": "non-empty", "ok": bool(files), "detail": f"{shortstat or '无改动'}"},
     ]
     acceptances = run_acceptance_set(repo, task, wt, safe_name(dispatch["id"]))

@@ -206,27 +206,21 @@ class TestUnits(unittest.TestCase):
         self.assertEqual(len(skips), 1)
         self.assertEqual(allowed, [])
 
-    def test_skip_allowlist_exempts_but_reports(self) -> None:
-        """项目自己的环境依赖惯例可放行，但要照报：放行项静默消失等于审查失明。"""
-        allow = foreman.compile_skip_allowlist([r'pytest\.skip\("需要 node'])
-        diff = ('+    pytest.skip("需要 node 18 才能跑冒烟")\n'
+    def test_env_skip_marker_exempts_but_reports(self) -> None:
+        """环境前置跳过要自带标记：放行照报，且标记写在被审代码里（随仓库分发、同步抹不掉）。"""
+        diff = ('+    pytest.skip("需要 node 18 才能跑冒烟")  # env-skip\n'
                 '+    pytest.skip("先跳过，回头补")\n'
                 "+git commit --no-verify\n")
-        secrets, skips, allowed = foreman.scan_added_lines(diff, allow)
+        _secrets, skips, allowed = foreman.scan_added_lines(diff)
         self.assertEqual(len(allowed), 1)
         self.assertIn("需要 node", allowed[0])
-        self.assertEqual(len(skips), 2, "无前置说明的跳过与 --no-verify 照拦")
+        self.assertEqual(len(skips), 2, "无标记的跳过与 --no-verify 照拦")
 
-    def test_skip_allowlist_never_exempts_secrets(self) -> None:
+    def test_env_skip_marker_never_exempts_secrets(self) -> None:
         """放行只管跳过；凭据没有「环境依赖」这种正当理由。"""
-        allow = foreman.compile_skip_allowlist([r".*"])
-        secrets, _, _ = foreman.scan_added_lines("+token = 'supersecretvalue123'\n", allow)
+        diff = "+token = 'supersecretvalue123'  # env-skip\n"
+        secrets, _skips, _allowed = foreman.scan_added_lines(diff)
         self.assertEqual(len(secrets), 1)
-
-    def test_skip_allowlist_bad_regex_is_visible(self) -> None:
-        """配置写错必须当场报，不能静默变成「什么都没放行」。"""
-        with self.assertRaises(SystemExit):
-            foreman.compile_skip_allowlist(["(未闭合"])
 
     def test_hcom_wait_message_takes_last_json_line(self) -> None:
         with tempfile.TemporaryDirectory() as td:

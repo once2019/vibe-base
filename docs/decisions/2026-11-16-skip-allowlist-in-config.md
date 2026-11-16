@@ -1,7 +1,7 @@
 # no-skip 放行改成 config 登记：项目约定不写进会被覆盖的脚本
 
 - 日期：2026-11-16
-- 状态：已生效
+- 状态：已被 `2026-11-16-env-skip-marker-in-code.md` 取代
 - 相关模块：`skills/vibe-base/assets/scripts/foreman.py`（`scan_added_lines`、`compile_skip_allowlist`、`cmd_review`）、`docs/governance/orchestration.md`
 
 ## 决策内容

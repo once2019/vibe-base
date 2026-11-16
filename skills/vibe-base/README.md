@@ -60,7 +60,7 @@
 
 3. 决策权分三档。自决是 worker 说了算，实现细节、命名、范围内的小取舍。主管拍板是接口形态、测试策略、换路、重派、拆任务、扩 scope。Ask-first 是 §4 那份清单，必须人类点头，并且要落一份决策记录。
 
-4. 完成定义先于实现。`task new` 两条硬判据：`--scope` 必须列路径，`--accept` 必须是一条可执行命令。写不出验收命令说明需求还没想清。`review` 跑六项检查：越界（`scope`）、密钥（`secrets`）、跳测痕迹（`no-skip`，项目自己的环境依赖跳过在 `skip_allowlist` 里登记，放行照报）、空改动（`non-empty`）、验收复跑（`acceptance`）、决策记录（`docs-decisions`），输出存进 `evidence/`，`merge` 之后在主干再跑一次。
+4. 完成定义先于实现。`task new` 两条硬判据：`--scope` 必须列路径，`--accept` 必须是一条可执行命令。写不出验收命令说明需求还没想清。`review` 跑六项检查：越界（`scope`）、密钥（`secrets`）、跳测痕迹（`no-skip`，声明环境前置的跳过带 `env-skip` 标记即放行，放行照报）、空改动（`non-empty`）、验收复跑（`acceptance`）、决策记录（`docs-decisions`），输出存进 `evidence/`，`merge` 之后在主干再跑一次。
 
 5. 异步回合。回合一做体检、建任务、派工，做完就结束回合，不 sleep 不开等待窗口。worker 请示或完成时发消息，通道把主管叫醒，进入回合二跑 `events`。一次 `events` 调用算一轮，连续两轮空等后第三次直接拒绝。每次 `events` 输出末尾都重申还在等人拍板的事项，处理 worker 交接时不会把它们滚忘。
 
