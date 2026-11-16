@@ -2340,7 +2340,7 @@ def pending_human_decisions(repo: Repo) -> list[dict]:
     状态在 task.json 里，缺的是每回合把它们拎出来重申。waiting_answer 是等 worker 回话，不算。
     """
     out: list[dict] = []
-    now = datetime.now(timezone.utc)
+    now = datetime.now(timezone.utc)  # noqa: UP017 — UTC 别名需 3.11+
     for tj in sorted(repo.tasks_dir.glob("*/task.json")):
         task = read_json(tj)
         if task.get("status") != "waiting_human":
@@ -2349,8 +2349,8 @@ def pending_human_decisions(repo: Repo) -> list[dict]:
             if g.get("resolved"):
                 continue
             try:
-                at = datetime.strptime(str(g.get("at", "")), "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
-                waited = now - at
+                at = datetime.strptime(str(g.get("at", "")), "%Y-%m-%dT%H:%M:%SZ")
+                waited = now - at.replace(tzinfo=timezone.utc)  # noqa: UP017 — UTC 别名需 3.11+
             except ValueError:
                 waited = None
             out.append({"task": task["id"], "title": task.get("title") or "",
