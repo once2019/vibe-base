@@ -392,6 +392,9 @@ class Repo:
             # 新树自举：主仓里这些路径（.env/.venv 之类，通常被 gitignore）软链进 worktree。
             # 缺什么因项目而异，只能登记，不能猜；空列表 = 不自举。
             "worktree_links": [],
+            # 审查门 no-skip 的放行正则（项目自己的「环境依赖跳过」惯例，如 pytest.skip("需要 node")）。
+            # 放行项照报不静默；空列表 = 任何跳过都拦。项目知识进 config，不进会被同步覆盖的脚本。
+            "skip_allowlist": [],
             "docs": dict(DEFAULT_DOCS),
         }
         if not self.config_path.exists():
@@ -2644,10 +2647,27 @@ def in_scope(rel: str, scope: list[str]) -> bool:
     return any(rel == s or rel.startswith(s.rstrip("/") + "/") for s in scope)
 
 
-def scan_added_lines(diff_text: str) -> tuple[list[str], list[str]]:
-    """扫描 diff 新增行：返回 (secret_hits, skip_hits)。"""
+def compile_skip_allowlist(patterns: list[str] | None) -> list[re.Pattern[str]]:
+    """把 config.skip_allowlist 编译成正则；写错当场报，不静默失效。"""
+    out: list[re.Pattern[str]] = []
+    for raw in patterns or []:
+        try:
+            out.append(re.compile(str(raw)))
+        except re.error as exc:
+            fail(f"skip_allowlist 里的正则写错了：{raw!r}（{exc}）")
+    return out
+
+
+def scan_added_lines(diff_text: str,
+                     allow: list[re.Pattern[str]] | None = None) -> tuple[list[str], list[str], list[str]]:
+    """扫描 diff 新增行：返回 (secret_hits, skip_hits, allowed_skips)。
+
+    放行项单独返回而不是丢掉：审查要看得到「哪几行被放过去了」，否则放行等于失明。
+    密钥不参与放行——凭据没有「环境依赖」这种正当理由。
+    """
     secrets: list[str] = []
     skips: list[str] = []
+    allowed: list[str] = []
     for line in diff_text.splitlines():
         if not line.startswith("+") or line.startswith("+++"):
             continue
@@ -2655,10 +2675,14 @@ def scan_added_lines(diff_text: str) -> tuple[list[str], list[str]]:
         for label, pat in SECRET_PATTERNS:
             if pat.search(body):
                 secrets.append(f"{label}: {body.strip()[:80]}")
-        for marker in SKIP_MARKERS:
-            if marker in body:
+        # 每行只判一次：SKIP_MARKERS 有嵌套子串（pytest.skip 里含 test.skip( 与 t.skip(），
+        # 逐个 marker 计会把一行数成三行，[:5] 截断后就看不到真正的第二处违规。
+        if any(marker in body for marker in SKIP_MARKERS):
+            if any(p.search(body) for p in allow or []):
+                allowed.append(body.strip()[:80])
+            else:
                 skips.append(body.strip()[:80])
-    return secrets, skips
+    return secrets, skips, allowed
 
 
 def diff_vs_base(repo: Repo, base: str, cwd: Path) -> tuple[str, str, str]:
@@ -2787,13 +2811,17 @@ def cmd_review(args: argparse.Namespace) -> int:
     names, full_diff, shortstat = diff_vs_base(repo, cfg["base"], wt)
     files = [n for n in names.splitlines() if n.strip()]
     out_scope = [f for f in files if not in_scope(f, task.get("scope", []))]
-    secrets, skips = scan_added_lines(full_diff)
+    secrets, skips, allowed_skips = scan_added_lines(
+        full_diff, compile_skip_allowlist(cfg.get("skip_allowlist")))
 
     checks = [
         {"name": "scope", "ok": not out_scope,
          "detail": "越界文件：" + ", ".join(out_scope) if out_scope else f"改动 {len(files)} 个文件全部在范围内"},
         {"name": "secrets", "ok": not secrets, "detail": "; ".join(secrets[:5]) if secrets else "未发现密钥痕迹"},
-        {"name": "no-skip", "ok": not skips, "detail": "; ".join(skips[:5]) if skips else "未发现跳测试/--no-verify 痕迹"},
+        {"name": "no-skip", "ok": not skips,
+         "detail": ("; ".join(skips[:5]) if skips
+                    else "未发现跳测试/--no-verify 痕迹"
+                    + (f"（{len(allowed_skips)} 条按 skip_allowlist 放行）" if allowed_skips else ""))},
         {"name": "non-empty", "ok": bool(files), "detail": f"{shortstat or '无改动'}"},
     ]
     acceptances = run_acceptance_set(repo, task, wt, safe_name(dispatch["id"]))
@@ -2824,7 +2852,8 @@ def cmd_review(args: argparse.Namespace) -> int:
 
     review = {
         "at": now_iso(), "dispatch": dispatch["id"], "files": files, "shortstat": shortstat,
-        "checks": checks, "acceptance": acceptances[0] if acceptances else None,
+        "checks": checks, "allowed_skips": allowed_skips,
+        "acceptance": acceptances[0] if acceptances else None,
         "acceptances": acceptances,
         "manual_items": [
             ("五轴读 diff：正确性（边界/错误路径/测试是否测行为）、可读性、架构（是否跟既有模式、"

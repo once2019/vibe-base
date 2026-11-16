@@ -192,6 +192,8 @@ cherry-pick 还要用）。不结算是僵尸会话：旧 worker 占着树，还
 
 `review` 六项：`scope`（越界）、`secrets`、`no-skip`（跳测试/`--no-verify` 痕迹）、`non-empty`、`acceptance`（复跑）、`docs-decisions`（决策记录）。前五项可自动判定，第六项是治理门槛。
 
+项目自己的「环境依赖跳过」惯例（如 `pytest.skip("需要 node 18")`）写进 `.vibe/config.json` 的 `skip_allowlist`（正则列表），命中即放行。放行项照报不静默：`review` 会写「N 条按 skip_allowlist 放行」，原文进 `task["review"]["allowed_skips"]`。`secrets` 不参与放行。放行清单必须留在 config 里，不写进脚本：脚本是会被同步覆盖的副本，项目约定写进去就会随同步消失（2026-11-16 实测：整文件覆盖同步抹掉窄放行，此后所有按惯例写的冒烟守卫都被误判不过）。
+
 自动全绿只证明"没有明显犯规"，不证明"对且值这个复杂度"。主管按五轴读 diff：
 
 | 轴 | 要回答的问题 |

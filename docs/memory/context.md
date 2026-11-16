@@ -16,8 +16,9 @@
 - 纪律两条进 orchestration：收信只走 events、提交叙事按 --stat 核
 - worktree 自举：config `worktree_links` 登记 → dispatch 建树后软链，缺项与未忽略当场告警
 - mutation_check 不做：留证已由 DONE 正文承担，变异点发现已有 mutator
+- no-skip 放行改 config `skip_allowlist`：放行照报、密钥不放行；修同行重复计数
 - 五轴复审自纠四处：helper 归位、仓外路径拒绝、asks 按 dispatch 配对、Orca 补链补测
-- 决策 19 条（含两条追记）；回归 198 → 211 项
+- 决策 20 条（含两条追记）；回归 198 → 214 项
 
 ## 进行中任务
 
