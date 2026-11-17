@@ -19,6 +19,7 @@
 - 奥卡姆剃刀：§3 一行（141 字符），判据「答不出具体损失就不加」
 - 第一性原理：§3 一行（116 字符），判据「说不出由哪几条约束推出就是照搬」；决策 19 条
 - `reject` 已加：review/merge_ready → failed，`--note` 必填，原文进日志
+- 「foreman 正本在上游」经裁决不进技能正本（项目侧 AGENTS.md 不该知道技能的存在）；storyboard 保留自己的那份
 - worktree 自举已落地（config `worktree_links`，默认空，不猜）；mutation_check 经复核不做（留证已由 DONE 承担，变异点发现归 mutator）
 - 控制面：doctor 18 项（含 `decisions-index`、`orchestration-reconcile`、`resource-leaks`、`quality-tools`）
 - 编码纪律细则 `coding-discipline.md`：八条判据 + 三段顺序 + 单会话审查口径 + 可选质量门槛

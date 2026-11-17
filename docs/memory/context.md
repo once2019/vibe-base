@@ -18,8 +18,9 @@
 - no-skip 放行改代码内 `env-skip` 标记（config 方案因 .vibe 不入库被推翻）；密钥不放行
 - 状态机：waiting_answer→review 开入口；DONE/ASK 证据先落盘再迁状态，拒收不丢原文
 - 单会话最低审查口径进 coding-discipline：验收先行、反证、条件性冷启动重读
+- reject 收 failed 且 `--body` 作别名；换树重派时派工单点名上一分支（否则 worker 从零重做）
 - 五轴复审自纠四处：helper 归位、仓外路径拒绝、asks 按 dispatch 配对、Orca 补链补测
-- 决策 21 条；回归 215 项
+- 决策 21 条（含四条追记）；回归 217 项
 
 ## 进行中任务
 

@@ -142,6 +142,10 @@ cherry-pick 还要用）。不结算是僵尸会话：旧 worker 占着树，还
 重派复用同一棵树：hcom 模式本来就复用；Orca 模式用 `--worktree path:<旧树>` 指向上一 attempt 的托管树
 （旧树不可用时降级新建，不阻断重派）。不复用会让 worktree 按 attempt 增殖，累计 diff 也断了。
 
+降级新建时新树是空的，前几次尝试的提交留在旧分支上。派工单会多一节「上一 attempt 的成果不在你这棵树里」，
+点名旧分支并给出 `cherry-pick` 口径——不点名，worker 会以为自己在做同一件事的第三次，从零重做（2026-11-16
+实测 w-T-055-a3：a1/a2 的 4 个提交在 `once2019/w-T-055-a2` 上，新树基于 master）。
+
 任务完成或 blocked 后，被淘汰 attempt 的树与分支由 `merge` / `task abandon` 一并清掉，结果记在
 `task["cleanup"]["stale_attempts"]`。
 
@@ -212,9 +216,10 @@ cherry-pick 还要用）。不结算是僵尸会话：旧 worker 占着树，还
 
 **必须做一次反证**：取反本次新增的一个条件（或删一条断言），确认对应测试转红再还原。全绿说明缺测试，补测试前不许 merge——这是"测试真的测到本次改动"的唯一证据。
 
-五轴读出「必须改」而机械检查全绿时，用 `reject <任务> --note "<要改什么>"` 打回：`review` / `merge_ready`
-都能打回（`review` 先跑、再读 diff 是常态，那时状态已经是 `merge_ready`），状态落 `failed`，裁决原文进事件
-日志，重派时把它写进 `--retry-note`。没有这道口子，主管只能手改 `task.json`（2026-11-16 实测两次）。
+五轴读出「必须改」而机械检查全绿时，用 `reject <任务> --note "<要改什么>"` 打回：`review` / `merge_ready` /
+`failed` 都能打回（`review` 先跑、再读 diff 是常态，那时状态已经是 `merge_ready`；`review` 已落 `failed` 时仍要
+能补记裁决原文），状态落 `failed`，裁决原文进事件日志，重派时把它写进 `--retry-note`。`--body` 是 `--note` 的
+别名，与 `reply --body` 对齐。没有这道口子，主管只能手改 `task.json`（2026-11-16 实测两次）。
 
 提交叙事按 `git log --stat` 核：一条提交的信息与实际改动不符（docs 提交里夹带 `scripts/` 改动）会让人按信息判断影响面时漏看，属`必须改`。
 

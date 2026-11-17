@@ -805,6 +805,42 @@ class TestEventFlow(TempGitRepoMixin):
         self.dispatch(["--retry-note", "判据收成一处"])
         self.assertEqual(self.repo.load_task("T-001")["status"], "running")
 
+    def test_reject_accepts_body_alias_and_failed_state(self) -> None:
+        """--body 是 --note 的别名；review 已落 failed 时仍要能补记裁决原文。"""
+        self.set_event("[FOREMAN:DONE] task=T-001 dispatch=D-001\n完成")
+        self.run_events()
+        self.assertEqual(foreman.main(["reject", "T-001", "--repo", str(self.root),
+                                       "--body", "判据重复"]), 0)
+        task = self.repo.load_task("T-001")
+        self.assertEqual(task["status"], "failed")
+        self.assertTrue(any("判据重复" in x["detail"] for x in task["log"]))
+        # 已经是 failed 时再记一次不报错（不重复迁移，只补日志）
+        self.assertEqual(foreman.main(["reject", "T-001", "--repo", str(self.root),
+                                       "--note", "再补一条"]), 0)
+        self.assertEqual(self.repo.load_task("T-001")["status"], "failed")
+        self.assertTrue(any("再补一条" in x["detail"] for x in self.repo.load_task("T-001")["log"]))
+
+    def test_brief_names_previous_branch_when_tree_changes(self) -> None:
+        """换树重派时新树是空的：不点名上一分支，worker 会以为自己在做同一件事的第三次。"""
+        wt = Path(self.repo.load_task("T-001")["dispatches"][0]["worktree"])
+        (wt / "README.md").write_text("越界\n", encoding="utf-8")
+        self.commit_in(wt, "oos")
+        self.set_event("[FOREMAN:DONE] task=T-001 dispatch=D-001\n完成")
+        self.run_events()
+        foreman.main(["review", "T-001", "--repo", str(self.root)])
+        self.assertEqual(self.repo.load_task("T-001")["status"], "failed")
+
+        # 模拟 Orca 复用旧树失败：把上一 attempt 的树路径改成一个不存在的新路径
+        task = self.repo.load_task("T-001")
+        prev_branch = task["dispatches"][-1]["branch"]
+        task["dispatches"][-1]["worktree"] = str(self.root / ".vibe" / "worktrees" / "gone")
+        self.repo.save_task(task)
+        self.dispatch(["--retry-note", "缩 scope 到 src/"])
+        brief = (self.repo.task_dir("T-001") / "brief.md").read_text(encoding="utf-8")
+        self.assertIn("上一 attempt 的成果不在你这棵树里", brief)
+        self.assertIn(prev_branch, brief)
+        self.assertIn("cherry-pick", brief)
+
     def test_reject_requires_note(self) -> None:
         """没有裁决原文的驳回等于没驳回：重派时无据可依。"""
         self.set_event("[FOREMAN:DONE] task=T-001 dispatch=D-001\n完成")

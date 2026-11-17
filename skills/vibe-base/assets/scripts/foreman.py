@@ -1483,6 +1483,17 @@ def brief_text(cfg: dict, task: dict) -> str:
     notes = task.get("retry_notes") or []
     retry = (f"\n## 重派说明（第 {task['attempts'] + 1} 次尝试）\n\n"
              f"上一次失败后主管改了：{notes[-1]['note']}\n") if notes else ""
+    # 换树重派（Orca 复用旧树失败降级新建、或旧树已被清）时，前几次尝试的提交不在新树里。
+    # 不点名就等于让 worker 以为「这是同一件事的第三次」，从零重做（2026-11-16 实测 w-T-055-a3）。
+    prev_tree = str(dispatches[-2].get("worktree") or "") if len(dispatches) >= 2 else ""
+    prev_branch = str(dispatches[-2].get("branch") or "") if len(dispatches) >= 2 else ""
+    cur_tree = str(dispatches[-1].get("worktree") or "") if dispatches else ""
+    carried = ""
+    if prev_tree and prev_branch and prev_tree != cur_tree:
+        carried = (f"\n## 上一 attempt 的成果不在你这棵树里\n\n"
+                   f"本次是新建的空树（基于 {base}）。前 {task['attempts']} 次尝试的提交在分支 "
+                   f"`{prev_branch}` 上，先 `git log --oneline {base}..{prev_branch}` 看清已做了什么，"
+                   f"要延续就 `git cherry-pick` 过来，不要从零重做。\n")
     proto_head = ("`--subject` 必须是 `[FOREMAN:<TYPE>] task={tid} dispatch=<dispatch-id>`"
                   if orca else
                   "消息正文首行必须是 `[FOREMAN:<TYPE>] task={tid} dispatch=<dispatch-id>`")
@@ -1501,7 +1512,7 @@ def brief_text(cfg: dict, task: dict) -> str:
 
 {scope}
 {deps}
-{items_block}{f"## 补充说明\\n\\n{task['notes']}\\n" if task.get("notes") else ""}{retry}## 完成定义（验收命令，完成后必须在 worktree 内真实跑过）
+{items_block}{f"## 补充说明\\n\\n{task['notes']}\\n" if task.get("notes") else ""}{retry}{carried}## 完成定义（验收命令，完成后必须在 worktree 内真实跑过）
 
 ```bash
 {task.get('acceptance') or '（主管尚未定义；开工前先通过 ASK 索要）'}
@@ -2786,16 +2797,19 @@ def cmd_reject(args: argparse.Namespace) -> int:
     cfg = effective_config(repo)
     assert_coordinator(repo, cfg)
     task = repo.load_task(args.task_id)
-    if task["status"] not in ("review", "merge_ready"):
-        fail(f"任务 {task['id']} 状态为 {task['status']}，只有 review / merge_ready 可裁决不通过")
-    if not (args.note or "").strip():
-        fail("必须写 --note：说清要改什么（进事件日志，也是重派 --retry-note 的依据）")
+    if task["status"] not in ("review", "merge_ready", "failed"):
+        fail(f"任务 {task['id']} 状态为 {task['status']}，只有 review / merge_ready / failed 可裁决不通过")
+    # --body 是 --note 的别名：兄弟命令 reply 用 --body，写错一次的代价是一轮派工（2026-11-16 实测）
+    note = (args.note or args.body or "").strip()
+    if not note:
+        fail("必须写 --note（也可用 --body）：说清要改什么（进事件日志，也是重派 --retry-note 的依据）")
     prev = task["status"]
-    repo.set_status(task, "failed")
-    repo.log_task(task, "failed", f"审查不通过（主管裁决，自 {prev}）：{args.note.strip()}")
+    if prev != "failed":
+        repo.set_status(task, "failed")
+    repo.log_task(task, "failed", f"审查不通过（主管裁决，自 {prev}）：{note}")
     repo.save_task(task)
-    emit(args, {"id": task["id"], "status": task["status"], "from": prev, "note": args.note.strip()},
-         f"{task['id']} {prev} → failed（审查不通过）：{args.note.strip()}\n"
+    emit(args, {"id": task["id"], "status": task["status"], "from": prev, "note": note},
+         f"{task['id']} {prev} → failed（审查不通过）：{note}\n"
          f"修正后用 dispatch {task['id']} --retry-note '<要点>' 重派（failed 可直接重派，也能 review 再审）。")
     return EXIT_OK
 
@@ -3257,7 +3271,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = sub.add_parser("reject", help="审查不通过（质量原因）：review/merge_ready → failed，记裁决原文")
     sp.add_argument("task_id")
-    sp.add_argument("--note", required=True, help="要改什么（进事件日志，也是重派 retry-note 的依据）")
+    sp.add_argument("--note", help="要改什么（进事件日志，也是重派 retry-note 的依据）")
+    sp.add_argument("--body", help="--note 的别名（与 reply --body 对齐）")
     sp.add_argument("--repo", default=".")
     add_json(sp)
     sp.set_defaults(func=cmd_reject)

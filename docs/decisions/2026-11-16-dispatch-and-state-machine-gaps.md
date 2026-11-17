@@ -110,3 +110,20 @@ storyboard 的 `8c3c77d` 补了 `waiting_answer → review` 这条边：答复�
 上报绕过人类裁决。这条不对称是有意的，测试钉住。
 
 变异三处全守住（补边、证据顺序、门未关仍推进），测试 213 → 215。
+
+## 追记四 2026-11-16（`reject` 的两个坑 + 换树重派丢成果）
+
+storyboard 实测踩到两处，都是「命令做对了事，但下一步被引到错的方向」。
+
+**一、`reject --body` 报错，任务没落 `failed`。** 兄弟命令 `reply` 用 `--body`，`reject` 用 `--note`，写错一次
+就是一轮派工。修法：`--body` 作别名。同时 `reject` 原本只收 `review` / `merge_ready`，而 `review` 机械失败后
+状态已经是 `failed`，此时想补记裁决原文会被拒——收 `failed`，不重复迁移，只补日志。
+
+**二、换树重派，前几次尝试的成果不在新树里。** Orca 复用旧树失败会降级 `new-top-level`，新树基于 base，旧提交
+留在旧分支。派工单原来只写「第 N 次尝试」和 `--retry-note`，worker 会以为自己在延续同一棵树，于是从零重做
+（w-T-055-a3：a1/a2 的 4 个提交在 `once2019/w-T-055-a2`）。修法：派工单在「上一 attempt 的树 ≠ 本次的树」时
+自动加一节，点名旧分支、给出 `git log --oneline <base>..<branch>` 与 `cherry-pick` 口径。
+
+判据是机械的：两次 dispatch 的 `worktree` 路径不同即触发，不靠人记得补。
+
+变异三处全守住，测试 215 → 217。
