@@ -8,8 +8,6 @@
 ## 本会话已完成
 
 - `events` 三条输出路径末尾重申 `waiting_human` 与未关 gate（带已等分钟数、选项、reply 指令）
-- §3 两条原则命名：奥卡姆剃刀（删掉会发生什么）与第一性原理（由哪几条约束推出）
-- 编码纪律补「按应用点复制」判据（第二个应用点出现第二份实现即该收敛）
 - 状态机：failed→review、merge_ready→failed（`reject`）、waiting_answer→review 三条边都开了入口
 - DONE/ASK 证据先落盘再迁状态：被拒收的消息不再丢原文（T-049 靠手工捞的根因）
 - reply 回填 asks[].answered_at；task new 输出范围自检；派工单要求遗留项可派单
