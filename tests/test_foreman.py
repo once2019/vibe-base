@@ -2142,6 +2142,25 @@ class TestChannelAwareArtifacts(unittest.TestCase):
         self.assertIn("hcom @f", hcom)
         self.assertIn("正文首行", hcom)
 
+    def test_worker_prompt_pins_post_answer_behavior(self) -> None:
+        """T-077/T-078 实测：worker 把「读到 ANSWER」当回合终点，收到裁决后挂起。
+
+        死法：唤醒 → check 读到 ANSWER → 一条纯 thinking 消息（无工具调用）→ 回合结束。
+        对 headless worker，结束回合 = 没人再叫醒。守卫文案在 worker_prompt
+        （启动时注入的操作指令），两条通道都必须有。"""
+        task = {"id": "T-1", "title": "x", "scope": [], "acceptance": "true"}
+        dispatch = {"id": "D-1", "run_id": "run_abc"}
+        brief = Path("/tmp/x/brief.md")
+        for cfg in ({"foreman_name": "f", "base": "main", "transport": "orca"},
+                    {"foreman_name": "f", "base": "main", "transport": "hcom"}):
+            prompt = foreman.worker_prompt(cfg, task, dispatch, brief)
+            self.assertIn("在同一回合继续实现", prompt)
+            self.assertIn("读裁决不是回合终点", prompt)
+            self.assertIn("唯一正确行为是继续实现", prompt)
+        orca = foreman.worker_prompt({"foreman_name": "f", "base": "main",
+                                      "transport": "orca"}, task, dispatch, brief)
+        self.assertIn("结束回合 = 挂起", orca)
+
 
 class TestEvidencePathInjection(TempGitRepoMixin):
     def test_dispatch_id_cannot_escape_evidence_dir(self) -> None:

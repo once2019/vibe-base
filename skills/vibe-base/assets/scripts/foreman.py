@@ -1439,7 +1439,10 @@ def worker_prompt(cfg: dict, task: dict, dispatch: dict, brief_path: Path) -> st
             f"6. 卡住时发 --subject '[FOREMAN:ESCALATE] task={task['id']} dispatch={dispatch['id']}' "
             f"--body '<已尝试方案+阻塞点>'，然后停止。\n"
             "Orca 的协议头放在 --subject，只在协议头里写 task/dispatch，正文放 --body。\n"
-            "回复会以 Orca 唤醒到达；必要时先 orca orchestration check --json 读取。\n"
+            "回复会以 Orca 唤醒到达（\"You have N orchestration messages\"）；先 orca orchestration check --json 读取。\n"
+            "唤醒消息只是叫你起来干活，不是任务终点：读到 ANSWER 后在同一回合继续实现，直到 DONE。"
+            "回合以「不带工具调用的消息」结束——对 headless worker，结束回合 = 挂起 = 没人再叫醒你。"
+            "读裁决不是回合终点：收到裁决后唯一正确行为是继续实现（或发新的 ASK/ESCALATE）。\n"
             "不要用 orca orchestration ask / gate-create：那会在你自己的终端里阻塞，主管侧看不到，"
             "请示一律走上一条的 [FOREMAN:ASK]。\n"
         )
@@ -1453,6 +1456,8 @@ def worker_prompt(cfg: dict, task: dict, dispatch: dict, brief_path: Path) -> st
             f"然后停止。\n"
             f"6. 卡住时发 '[FOREMAN:ESCALATE] task={task['id']} dispatch={dispatch['id']} <已尝试方案+阻塞点>'，"
             f"然后停止。\n"
+            "回复会以 hcom 唤醒到达；读到 ANSWER 后在同一回合继续实现，直到 DONE。"
+            "读裁决不是回合终点：收到裁决后唯一正确行为是继续实现（或发新的 ASK/ESCALATE）。\n"
             "<你的实例名> 用你启动时 [HCOM SESSION] bootstrap 里告知的名字；不要用本段文字里的任何名字。\n"
         )
     return head + proto + ("红线：不 merge、不 push、不删分支、不跨范围改动、不提交密钥；"
