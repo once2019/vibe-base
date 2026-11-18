@@ -27,3 +27,4 @@
 - 2026-11-16｜技能库｜[派工与状态机的四处补漏](2026-11-16-dispatch-and-state-machine-gaps.md)｜已生效｜failed→review 必须有入口否则等于没修；asks 回填答复时间；task new 范围自检；遗留项可派单；收信只走 events、提交叙事按 --stat 核
 - 2026-11-16｜技能库｜[no-skip 放行改成 config 登记](2026-11-16-skip-allowlist-in-config.md)｜已被取代｜config 放行清单（`.vibe` 不入库，规则不随仓库分发，见取代条）；顺带修同行重复计数
 - 2026-11-16｜技能库｜[环境前置跳过用代码内标记](2026-11-16-env-skip-marker-in-code.md)｜已生效｜`env-skip` 写在被审代码里：随仓库分发、diff 可见、同步覆盖不到；取代 config 清单那条
+- 2026-11-18｜技能库｜[AGENTS.md §3 增「用户意图先复述再动手」](2026-11-18-restate-user-intent-before-acting.md)｜已生效｜复述成「改哪个文件或行为 + 判据」一行，写不出或两种解读先问一次一问；「感觉/好像」要观测不要改规则；否决「主管必须问人类」那条（挪了决策档位）
