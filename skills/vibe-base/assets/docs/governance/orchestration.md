@@ -255,4 +255,7 @@ cherry-pick 还要用）。不结算是僵尸会话：旧 worker 占着树，还
 - 控制面动作一律走 `scripts/foreman.py`，不手拼 hcom/orca 命令；worker 只用派工单给定的模板发协议消息。
 - 收信只用 `foreman events`：通道的 `orchestration check` 会把消息标成已读，绕过状态机，DONE 被它消费后任务卡在 `running`、`reconcile` 报分歧（2026-11-15 实测 T-036）。排查用 `check --peek`，不推进状态。
 - 状态唯一事实源是 `task.json`；通道消息只是事件。
+- **发协议消息必须确认发出**：Orca 要拿到 `messageId`，hcom 要有成功输出；没有就当没发，先核 inbox。
+  正文含反引号或 `$` 时整段用单引号包裹（双引号里会被 bash 先替换掉，命令可能整个没执行——
+  2026-11-17 实测：以为 ANSWER 已发，worker 侧 inbox 是空的，看起来像 worker 卡住）。
 - 与 AGENTS.md 冲突时以 AGENTS.md 为准；本文件不自立红线。

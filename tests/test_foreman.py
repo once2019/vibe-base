@@ -2160,6 +2160,18 @@ class TestChannelAwareArtifacts(unittest.TestCase):
         orca = foreman.worker_prompt({"foreman_name": "f", "base": "main",
                                       "transport": "orca"}, task, dispatch, brief)
         self.assertIn("结束回合 = 挂起", orca)
+        # 口径有歧义先问：worker 把推论当事实用，猜错一轮就是整轮返工（2026-11-17 实测）
+        for prompt in (orca, foreman.worker_prompt({"foreman_name": "f", "base": "main",
+                                                    "transport": "hcom"}, task, dispatch, brief)):
+            self.assertIn("先发 ASK 列选项与推荐项，不许猜着做", prompt)
+
+    def test_brief_forbids_guessing_intent(self) -> None:
+        """派工单与裁决口径有歧义必须问，不许猜（worker 只读 brief，不读 orchestration.md）。"""
+        task = {"id": "T-1", "title": "x", "scope": [], "acceptance": "true", "dispatches": []}
+        brief = foreman.brief_text({"foreman_name": "f", "base": "main",
+                                    "transport": "hcom"}, task)
+        self.assertIn("不许猜", brief)
+        self.assertIn("把推论当事实用", brief)
 
 
 class TestEvidencePathInjection(TempGitRepoMixin):

@@ -1461,7 +1461,8 @@ def worker_prompt(cfg: dict, task: dict, dispatch: dict, brief_path: Path) -> st
             "<你的实例名> 用你启动时 [HCOM SESSION] bootstrap 里告知的名字；不要用本段文字里的任何名字。\n"
         )
     return head + proto + ("红线：不 merge、不 push、不删分支、不跨范围改动、不提交密钥；"
-                           "不写 docs/memory/ 与 docs/progress/（主管独占）。"
+                           "不写 docs/memory/ 与 docs/progress/（主管独占）；"
+                           "派工单或裁决口径有歧义先发 ASK 列选项与推荐项，不许猜着做。"
                            "消息一律走所选编排通道，首行必须带上面的协议头（Orca 放 --subject，hcom 放正文首行）。")
 
 
@@ -1562,6 +1563,8 @@ TYPE 取 ASK / DONE / ESCALATE。请示用 ASK（附问题、选项、推荐项�
 - 不提交密钥；不跳过测试；遵循仓库 AGENTS.md 与 Ask-first 清单。
 - 不写 `docs/memory/`、不写 `docs/progress/`：会话态与竣工单由主管独占写入；你的结论写进 DONE 正文。
 - 发现影响面超出本单范围 → 发 ASK 附影响面清单，不许自行越界。
+- 派工单、裁决、验收口径有任何不确定 → 发 ASK 列选项与推荐项，不许猜。把推论当事实用（「大概是这个
+  意思」）即违规：猜错一轮等于整轮返工，问一句只花一条消息。
 """
 
 
