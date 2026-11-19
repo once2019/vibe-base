@@ -1634,6 +1634,38 @@ class TestDoctor(unittest.TestCase):
         self.assertIn("crapper", entry[0]["detail"])
         self.assertIn("unclebob/crapper", entry[0]["fix"])
 
+    def test_governance_budget_counts_total_chars_not_widest_line(self) -> None:
+        """预算按「行数 + 总字符」判：单行很长但总量不超不算超；总量超了才 FAIL。
+
+        单行上限会逼出别扭断行（2026-11-19 实测：为压一行字符重写整份 context.md），
+        而「行数达标、每行塞满」这个真实风险由总字符数堵住，一次算总数也更可判定。
+        """
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            run_git(root, "init", "-q")
+            foreman.write_json(root / ".vibe" / "config.json",
+                               {"foreman_name": "foreman", "tag": "foreman", "default_agent": "codex",
+                                "base": "main", "max_attempts": 3, "require_human_review": False,
+                                "hcom_bin": "definitely-not-on-path-xyz"})
+            (root / "AGENTS.md").write_text("x" * 500 + "\n" + "y\n" * 10, encoding="utf-8")
+            with patch.object(foreman, "quality_tools_status", return_value=[]):
+                out = io.StringIO()
+                with contextlib.redirect_stdout(out):
+                    foreman.main(["doctor", "--repo", str(root), "--json"])
+            entry = [c for c in json.loads(out.getvalue())["checks"]
+                     if c["name"] == "governance-budget"][0]
+            self.assertTrue(entry["ok"], "单行 500 字符但总量在预算内，不该 FAIL")
+            self.assertIn("字符", entry["detail"])
+
+            (root / "AGENTS.md").write_text("z" * (foreman.AGENTS_BUDGET_TOTAL + 1), encoding="utf-8")
+            with patch.object(foreman, "quality_tools_status", return_value=[]):
+                out = io.StringIO()
+                with contextlib.redirect_stdout(out):
+                    foreman.main(["doctor", "--repo", str(root), "--json"])
+            entry = [c for c in json.loads(out.getvalue())["checks"]
+                     if c["name"] == "governance-budget"][0]
+            self.assertFalse(entry["ok"], "总量超预算必须 FAIL")
+
     def test_doctor_reports_missing_hcom(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

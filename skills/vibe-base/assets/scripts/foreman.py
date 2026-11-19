@@ -26,7 +26,7 @@ from typing import Any, NoReturn
 EXIT_OK = 0
 EXIT_ERROR = 1
 AGENTS_BUDGET_LINES = 100  # AGENTS.md §5 双预算（模板契约值，改它是一次治理动作）
-AGENTS_BUDGET_CHARS = 200
+AGENTS_BUDGET_TOTAL = 10000  # 总字符数：一次算总数，比单行上限更可判定也更少摩擦
 HCOM_LIST_TIMEOUT = 60  # hcom list 的等待上限：doctor 与 init 共用，别各写一个
 
 HEADER_RE = re.compile(r"^\[FOREMAN:([A-Z_]+)\]\s+task=(\S+)\s+dispatch=(\S+)", re.MULTILINE)
@@ -1745,11 +1745,11 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     # 治理预算：把"定期自查"变成每次体检都能看到的一条（预算值即模板契约，见 AGENTS.md §5）
     agents_md = repo.root / "AGENTS.md"
     if agents_md.exists():
-        lines = agents_md.read_text(encoding="utf-8").splitlines()
-        widest = max((len(x) for x in lines), default=0)
-        detail = (f"{len(lines)} 行（预算 {AGENTS_BUDGET_LINES}）/ 最长 {widest} 字符"
-                  f"（预算 {AGENTS_BUDGET_CHARS}）")
-        if len(lines) > AGENTS_BUDGET_LINES or widest > AGENTS_BUDGET_CHARS:
+        text = agents_md.read_text(encoding="utf-8")
+        lines = text.splitlines()
+        detail = (f"{len(lines)} 行（预算 {AGENTS_BUDGET_LINES}）/ 共 {len(text)} 字符"
+                  f"（预算 {AGENTS_BUDGET_TOTAL}）")
+        if len(lines) > AGENTS_BUDGET_LINES or len(text) > AGENTS_BUDGET_TOTAL:
             check("governance-budget", False, detail + "：超预算先修剪，别压缩措辞",
                   "删「读代码即可获知」的条目，或把细节挪进 docs/governance/")
         else:
