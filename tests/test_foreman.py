@@ -342,8 +342,10 @@ class TestInitAndTask(TempGitRepoMixin):
             self.assertIn(axis, brief, f"自审缺{axis[:-1]}轴")
         self.assertIn("反证一次", brief)
         self.assertIn("仍然全绿，说明缺测试", brief)
-        for level in ("阻断", "必须改", "建议", "备查"):
+        # 严重度两档：四档里「阻断」与「必须改」同义、「备查」无人消费（2026-11-19 剃刀审计）
+        for level in ("必须改", "建议"):
             self.assertIn(level, brief)
+        self.assertNotIn("备查", brief)
         self.assertIn("不采信自报", brief)
         self.assertEqual(foreman.main(["task", "new", "--repo", str(self.root), "--title", "第二个"]), 0)
         self.assertEqual(self.repo.load_task("T-002")["status"], "pending")
@@ -653,9 +655,10 @@ class TestDispatch(TempGitRepoMixin):
         self.assertIn("D-001", prompt)
         self.assertIn("brief.md", prompt)
         self.assertIn("发 DONE 之前先自审", prompt)
+        # 自审细节只归 brief 一处：prompt 留指针，否则同一份要求双份注入且会漂移
+        self.assertIn("按派工单「自审」节的步骤做", prompt)
         self.assertIn("五轴", prompt)
         self.assertIn("反证", prompt)
-        self.assertIn("标严重度", prompt)
 
     def test_dispatch_refuses_duplicate_tree(self) -> None:
         self.full_task()
