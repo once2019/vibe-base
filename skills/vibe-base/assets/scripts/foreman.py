@@ -1411,7 +1411,6 @@ class Orca(Transport):
 
 def worker_prompt(cfg: dict, task: dict, dispatch: dict, brief_path: Path) -> str:
     foreman = cfg["foreman_name"]
-    base = cfg.get("base") or "main"
     head = (
         f"你是 vibe-foreman 的 worker，负责任务 {task['id']}（派工记录 {dispatch['id']}）。\n"
         f"1. 阅读并完整遵循仓库 AGENTS.md（若存在）与派工单 {brief_path}（注意：派工单在主仓库目录，不在本 worktree 内）。\n"
