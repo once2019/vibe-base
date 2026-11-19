@@ -26,7 +26,7 @@
 - `events` 三条输出路径末尾重申 `waiting_human` 与未关 gate，`waiting_answer` 不算
 - worker 挂起根因：读裁决后产出无工具调用的消息=回合结束；worker_prompt 已钉死「唯一正确行为是继续实现」
 - 换树重派时派工单自动加「上一 attempt 的成果不在你这棵树里」节，点名旧分支与 cherry-pick
-- 未完成清单：空
+- 未完成清单：见 `docs/progress/2026-11-19-会话收口-worker挂起与规则减法.md` 的遗留问题节（doctor 质量工具检查会撒谎、技能仓无 ruff 门禁、两条剃刀减法未动）
 
 ## 关键决策引用
 
