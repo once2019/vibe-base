@@ -342,6 +342,12 @@ class TestInitAndTask(TempGitRepoMixin):
             self.assertIn(axis, brief, f"自审缺{axis[:-1]}轴")
         self.assertIn("反证一次", brief)
         self.assertIn("仍然全绿，说明缺测试", brief)
+        # 大改动必须跑质量工具，否则「装了工具却手搓」没有约束（2026-11-19 实测 doctor 只判存在）
+        self.assertIn("第四步：大改动跑质量工具", brief)
+        self.assertIn("--numstat", brief)
+        self.assertIn("~/tools/crapper/crapper", brief)
+        self.assertIn("~/tools/dryer/dryer", brief)
+        self.assertIn("不阻断上报", brief)
         # 严重度两档：四档里「阻断」与「必须改」同义、「备查」无人消费（2026-11-19 剃刀审计）
         for level in ("必须改", "建议"):
             self.assertIn(level, brief)
