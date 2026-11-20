@@ -348,6 +348,10 @@ class TestInitAndTask(TempGitRepoMixin):
         self.assertIn("~/tools/crapper/crapper", brief)
         self.assertIn("~/tools/dryer/dryer", brief)
         self.assertIn("不阻断上报", brief)
+        # 结果要消费：只贴数字不作处理不算自审完成
+        self.assertIn("结果要消费", brief)
+        self.assertIn("CRAP > 30", brief)
+        self.assertIn("视为自审未完成", brief)
         # 严重度两档：四档里「阻断」与「必须改」同义、「备查」无人消费（2026-11-19 剃刀审计）
         for level in ("必须改", "建议"):
             self.assertIn(level, brief)

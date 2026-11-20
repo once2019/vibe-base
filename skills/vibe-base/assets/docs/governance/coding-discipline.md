@@ -114,7 +114,7 @@
 | dryer | 结构重复候选 | `~/tools/dryer/dryer <目录>...` |
 | mutator | 变异点与存活数 | `~/tools/mutator/mutator --scan <文件>` |
 
-CRAP = CC² × (1 − 覆盖率)³ + CC。1 到 5 低风险，5 到 30 值得看，30 以上复杂且覆盖不足。分数需要覆盖率：crapper 只读 `coverage/lcov.info`，没有它时只出 CC，Cov% 与 CRAP 显示 N/A。
+CRAP = CC² × (1 − 覆盖率)³ + CC。1 到 5 低风险，5 到 30 值得看，30 以上复杂且覆盖不足。**30 以上且落在本次 diff 内的函数，要么拆分，要么说明为什么不拆**——跑出数字不处理等于没跑。分数需要覆盖率：crapper 只读 `coverage/lcov.info`，没有它时只出 CC，Cov% 与 CRAP 显示 N/A。
 
 重复度默认阈值 0.82，达到即列为候选。候选不等于该合并，结构相似但职责不同的代码合并后更糟，要人工判断。
 
