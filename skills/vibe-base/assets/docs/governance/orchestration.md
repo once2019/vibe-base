@@ -128,6 +128,12 @@ python3 scripts/foreman.py task new --repo . --title "EP1 三处修" \
 
 `--retry-note` 会写进派工单的「重派说明」节，worker 看得到上一次为什么失败、这次改了什么。不写说明的重派，等于让它重跑一遍同样的错误。
 
+**主管侧缺陷不占次数**：验收命令写错、新树缺本地配置（`.env`/`.venv`）、scope 漏登记这类失败，代码方向从未被否，
+是主管的活。查明后用 `dispatch <id> --infra "<根因>"` 重跑：不推进 `attempts`、不受 `max_attempts` 拦住，派工单的
+「重派说明」会标「主管侧修正重跑，不计入尝试次数」。`--infra` 与 `--retry-note` 二选一（理由本身就是重派说明），
+只接受 `failed` 状态；配额已满时先 `task unblock --reason` 由人类确认「block 是主管侧造成的」，再 infra 重跑——
+blocked 仍是人类门，不许自己绕。
+
 三次用完仍失败，任务进 `blocked`。这时该问的是"任务是不是拆大了"，而不是"再派一次会不会好"。
 
 同一道门连续失败两次时，先按 `coding-discipline.md`「两次失败后攻击前提」把被推翻的前提写成一句话，写进第三次的 `--retry-note`；写不出前提就转 `blocked`，不再派。

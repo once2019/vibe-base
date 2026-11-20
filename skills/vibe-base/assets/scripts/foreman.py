@@ -1483,8 +1483,11 @@ def brief_text(cfg: dict, task: dict) -> str:
         items_block = ("\n## 子项（按顺序做，每项一个 commit，逐项跑完再下一项）\n\n"
                        + "\n".join(rows) + "\n\n全部做完再发 DONE，DONE 正文列出每个子项对应的 commit。\n")
     notes = task.get("retry_notes") or []
-    retry = (f"\n## 重派说明（第 {task['attempts'] + 1} 次尝试）\n\n"
-             f"上一次失败后主管改了：{notes[-1]['note']}\n") if notes else ""
+    # 第几次尝试以 task["attempts"] 为准（brief 在 attempts 落盘后生成）；原先写 attempts+1，重派时多算一次
+    attempt_no = task.get("attempts") or (len(dispatches) if dispatches else 0) or 1
+    infra_last = bool(dispatches and dispatches[-1].get("infra"))
+    label = f"第 {attempt_no} 次尝试" + ("（主管侧修正重跑，不计入尝试次数）" if infra_last else "")
+    retry = (f"\n## 重派说明（{label}）\n\n上一次之后主管改了：{notes[-1]['note']}\n") if notes else ""
     # 换树重派（Orca 复用旧树失败降级新建、或旧树已被清）时，前几次尝试的提交不在新树里。
     # 不点名就等于让 worker 以为「这是同一件事的第三次」，从零重做（2026-11-16 实测 w-T-055-a3）。
     prev_tree = str(dispatches[-2].get("worktree") or "") if len(dispatches) >= 2 else ""
@@ -2161,8 +2164,15 @@ def cmd_dispatch(args: argparse.Namespace) -> int:
              + ("；failed 需先处理失败原因" if task["status"] == "failed" else ""))
     if not task.get("acceptance"):
         fail(f"任务 {task['id']} 未定义验收命令，先 task set-acceptance")
+    infra_reason = (args.infra or "").strip()
     max_attempts = cfg.get("max_attempts", 3)
-    if task["attempts"] >= max_attempts:
+    if infra_reason and not task.get("dispatches"):
+        fail("--infra 只用于重跑：本次是首次派工，没有上一 attempt 可修正")
+    if infra_reason and task["status"] != "failed":
+        fail(f"任务 {task['id']} 状态为 {task['status']}，--infra 只用于 failed 任务的主管侧修正重跑")
+    if infra_reason and (args.retry_note or "").strip():
+        fail("--infra 与 --retry-note 二选一：infra 的理由本身就是重派说明，两个来源会互相盖")
+    if task["attempts"] >= max_attempts and not infra_reason:
         repo.set_status(task, "blocked")
         repo.log_task(task, "blocked", f"尝试 {task['attempts']}/{max_attempts} 次后仍失败，交人类处理")
         repo.save_task(task)
@@ -2177,6 +2187,9 @@ def cmd_dispatch(args: argparse.Namespace) -> int:
         fail("scope 与在跑任务相交，并行会撞同一批文件：" + "；".join(conflicts[:5])
              + "（确要并行且已知怎么收合并冲突，加 --allow-overlap）")
     retry_note = (args.retry_note or "").strip()
+    if infra_reason:
+        retry_note = (f"主管侧修正（不计入尝试次数）：{infra_reason}"
+                      "。上一 attempt 的代码方向未被否决，按需只改验收环境或范围登记。")
     if is_retry and not retry_note:
         fail(f"任务 {task['id']} 是重派：必须在 --retry-note 里写清这次改了什么"
              "（缩 scope / 补背景 / 换 agent / 换验收口径），原样重派只会再失败一次")
@@ -2202,10 +2215,17 @@ def cmd_dispatch(args: argparse.Namespace) -> int:
     branch = f"foreman/{task['id']}-{task['slug']}"
 
     dispatch_id = repo.next_dispatch_id(task)
-    # 名字带 attempt：重派不复用旧名，否则新旧 worker 同名，协议消息会混（实测 w-T-036）
-    worker_handle = f"w-{task['id']}-a{task['attempts'] + 1}"
+    # 名字带 attempt：重派不复用旧名，否则新旧 worker 同名，协议消息会混（实测 w-T-036）。
+    # infra 不推进 attempt，所以另加 -i<n> 后缀，避免与同 attempt 的上一个 worker 撞名。
+    if infra_reason:
+        infra_n = sum(1 for d in task["dispatches"] if d.get("infra")) + 1
+        attempt_no = max(1, task["attempts"])
+        worker_handle = f"w-{task['id']}-a{attempt_no}-i{infra_n}"
+    else:
+        attempt_no = task["attempts"] + 1
+        worker_handle = f"w-{task['id']}-a{attempt_no}"
     dispatch = {
-        "id": dispatch_id, "attempt": task["attempts"] + 1, "at": now_iso(),
+        "id": dispatch_id, "attempt": attempt_no, "at": now_iso(),
         "agent": None, "agent_source": None, "headless": bool(args.headless),
         "worktree": str(wt), "branch": branch, "worker_handle": worker_handle,
     }
@@ -2272,10 +2292,15 @@ def cmd_dispatch(args: argparse.Namespace) -> int:
     if cfg.get("transport") == "orca" and info.get("worktree"):
         # Orca 自建托管树：路径只有 worker-start 回执里有，只能启动后补链（worker 可能已跑起来）
         link_notes = worktree_link_notes(repo, Path(str(info["worktree"])), cfg)
+    if infra_reason:
+        dispatch["infra"] = infra_reason
     task["dispatches"].append(dispatch)
+    # infra 的 attempt 号从 attempts 派生（见上面 attempt_no），所以这里不需要分支：
+    # 结构上就不可能推进计数，不靠 if 判断。
     task["attempts"] = dispatch["attempt"]
     repo.set_status(task, "running")
     repo.log_task(task, "running", f"{dispatch_id} worker={dispatch['worker_handle']}（{agent}{' headless' if args.headless else ''}）"
+                  + ("；主管侧修正重跑，不计入尝试次数" if infra_reason else "")
                   + ("；" + "；".join(link_notes) if link_notes else ""))
     repo.save_task(task)
 
@@ -3244,6 +3269,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--agent", help="worker agent，默认取任务/config")
     sp.add_argument("--headless", action="store_true", help="无终端环境必须显式开启")
     sp.add_argument("--retry-note", help="重派时必须写：这次改了什么（进派工单，worker 能看到）")
+    sp.add_argument("--infra", metavar="REASON",
+                    help="主管侧缺陷重跑（验收命令写错/环境缺文件/scope 漏登记）：不计入尝试次数，REASON 必填")
     sp.add_argument("--allow-overlap", action="store_true",
                     help="scope 与在跑任务相交仍要派工（已知如何处理合并冲突才用）")
     add_json(sp)

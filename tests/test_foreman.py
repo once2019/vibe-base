@@ -670,6 +670,90 @@ class TestDispatch(TempGitRepoMixin):
         self.assertIn("五轴", prompt)
         self.assertIn("反证", prompt)
 
+    def test_infra_dispatch_does_not_burn_attempts(self) -> None:
+        """主管侧缺陷（验收命令写错/缺环境/scope 漏登记）重跑不占尝试次数。
+
+        实测：T-027 派了 4 次，前三次全是主管侧问题，配额烧光后任务差点被判
+        「该拆」，而代码方向从未被否。
+        """
+        self.full_task()
+        self.dispatch()
+        self.set_event("[FOREMAN:DONE] task=T-001 dispatch=D-001\n完成")
+        self.run_events()
+        foreman.main(["reject", "T-001", "--repo", str(self.root), "--note", "缩 scope"])
+        self.dispatch(["--retry-note", "缩 scope"])
+        task = self.repo.load_task("T-001")
+        self.assertEqual(task["attempts"], 2)
+
+        # 再一次审查不通过 → failed，此时用 infra 重跑
+        self.set_event("[FOREMAN:DONE] task=T-001 dispatch=D-002\n完成")
+        self.run_events()
+        foreman.main(["reject", "T-001", "--repo", str(self.root), "--note", "验收命令写错，重跑"])
+        self.assertEqual(self.repo.load_task("T-001")["status"], "failed")
+
+        self.dispatch(["--infra", "验收命令的 && 链没包 shell"])
+        task = self.repo.load_task("T-001")
+        self.assertEqual(task["attempts"], 2, "infra 重跑不推进尝试次数")
+        self.assertEqual(len(task["dispatches"]), 3)
+        self.assertTrue(task["dispatches"][-1].get("infra"))
+        self.assertEqual(task["dispatches"][-1]["attempt"], 2, "infra 派工记录的 attempt 不推进")
+        brief = (self.repo.task_dir("T-001") / "brief.md").read_text(encoding="utf-8")
+        self.assertIn("主管侧修正重跑，不计入尝试次数", brief)
+        self.assertIn("&& 链没包 shell", brief)
+
+    def _failed_with_prev(self, attempts: int = 1) -> None:
+        """把任务摆成「已派过 attempts 次、审查不通过」的 failed 态。"""
+        task = self.repo.load_task("T-001")
+        task["attempts"] = attempts
+        task["status"] = "failed"
+        task["dispatches"] = [{"id": f"D-00{i}", "attempt": i, "at": foreman.now_iso(),
+                               "worktree": str(self.root / ".vibe" / "worktrees" / "T-001")}
+                              for i in range(1, attempts + 1)]
+        self.repo.save_task(task)
+
+    def test_infra_dispatch_requires_reason_and_failed_state(self) -> None:
+        self.full_task()
+        # 首次派工不能标 infra
+        with self.assertRaises(SystemExit):
+            foreman.main(["dispatch", "T-001", "--repo", str(self.root), "--infra", "x"])
+        # 状态不是 failed 不能标 infra（ready 也不行）
+        with self.assertRaises(SystemExit):
+            foreman.main(["dispatch", "T-001", "--repo", str(self.root), "--infra", "x"])
+        # 理由空白拒绝
+        self._failed_with_prev()
+        with self.assertRaises(SystemExit):
+            foreman.main(["dispatch", "T-001", "--repo", str(self.root), "--infra", "   "])
+        # 与 --retry-note 同时给拒绝（两个来源会互相盖）
+        with self.assertRaises(SystemExit):
+            foreman.main(["dispatch", "T-001", "--repo", str(self.root),
+                          "--infra", "x", "--retry-note", "y"])
+
+    def test_infra_dispatch_works_after_attempts_exhausted(self) -> None:
+        """配额用满、人工 unblock 判明是主管侧缺陷后，infra 重跑不推进次数。"""
+        self.full_task()
+        max_attempts = foreman.effective_config(self.repo).get("max_attempts", 3)
+        self._failed_with_prev(attempts=max_attempts)
+        with self.assertRaises(SystemExit):  # 普通重派被配额挡住
+            foreman.main(["dispatch", "T-001", "--repo", str(self.root), "--retry-note", "x"])
+        self.assertEqual(self.repo.load_task("T-001")["status"], "blocked")
+        # blocked 仍是人类门：人工判明根因后 unblock（不重置次数），再 infra 重跑
+        foreman.main(["task", "unblock", "T-001", "--repo", str(self.root),
+                      "--reason", "前三次失败都是主管侧缺陷"])
+        self.assertEqual(foreman.main(["dispatch", "T-001", "--repo", str(self.root),
+                                       "--infra", "缺 .env 导致验收假红"]), 0)
+        task = self.repo.load_task("T-001")
+        self.assertEqual(task["attempts"], max_attempts, "infra 不推进次数")
+        self.assertTrue(task["dispatches"][-1].get("infra"))
+
+    def test_brief_attempt_number_matches_attempts(self) -> None:
+        """派工单的「第 N 次尝试」必须等于 attempts，原先写 attempts+1 会多算一次。"""
+        task = {"id": "T-1", "title": "x", "scope": [], "acceptance": "true", "attempts": 2,
+                "dispatches": [{"id": "D-1", "attempt": 2}],
+                "retry_notes": [{"at": "now", "note": "缩 scope"}]}
+        brief = foreman.brief_text({"foreman_name": "f", "base": "main", "transport": "hcom"}, task)
+        self.assertIn("第 2 次尝试", brief)
+        self.assertNotIn("第 3 次尝试", brief)
+
     def test_dispatch_refuses_duplicate_tree(self) -> None:
         self.full_task()
         self.dispatch()
