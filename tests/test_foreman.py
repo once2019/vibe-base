@@ -340,6 +340,8 @@ class TestInitAndTask(TempGitRepoMixin):
             self.assertIn(item, brief)
         for axis in ("正确性：", "可读性：", "架构：", "安全：", "性能："):
             self.assertIn(axis, brief, f"自审缺{axis[:-1]}轴")
+        # 容忍模型输出形态的成本必须留在归一层：消费点各自猜形状是不可逆的沉积
+        self.assertIn("外部输入的形态判断只许在归一层", brief)
         self.assertIn("反证一次", brief)
         self.assertIn("仍然全绿，说明缺测试", brief)
         # 大改动必须跑质量工具，否则「装了工具却手搓」没有约束（2026-11-19 实测 doctor 只判存在）
