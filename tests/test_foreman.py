@@ -342,8 +342,8 @@ class TestInitAndTask(TempGitRepoMixin):
             self.assertIn(axis, brief, f"自审缺{axis[:-1]}轴")
         # 容忍模型输出形态的成本必须留在归一层：消费点各自猜形状是不可逆的沉积
         self.assertIn("外部输入的形态判断只许在归一层", brief)
-        # 默认服从会把无用守卫复制成范本：可以报告，不得自行放宽或绕
-        self.assertIn("不许在消费点加兼容分支绕过", brief)
+        # 默认服从会把无用守卫复制成范本：可以报告，不得自行放宽或就地绕
+        self.assertIn("不许自行放宽或就地", brief)
         self.assertIn("放宽由主管裁决", brief)
         self.assertIn("反证一次", brief)
         self.assertIn("仍然全绿，说明缺测试", brief)
