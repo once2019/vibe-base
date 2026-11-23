@@ -2289,11 +2289,11 @@ class TestChannelAwareArtifacts(unittest.TestCase):
                     {"foreman_name": "f", "base": "main", "transport": "hcom"}):
             prompt = foreman.worker_prompt(cfg, task, dispatch, brief)
             self.assertIn("在同一回合继续实现", prompt)
-            self.assertIn("读裁决不是回合终点", prompt)
-            self.assertIn("唯一正确行为是继续实现", prompt)
+            self.assertIn("读裁决不是回合终点，收到裁决后继续实现", prompt)
+            self.assertIn("回合以不带工具调用的消息结束", prompt)
         orca = foreman.worker_prompt({"foreman_name": "f", "base": "main",
                                       "transport": "orca"}, task, dispatch, brief)
-        self.assertIn("结束回合 = 挂起", orca)
+        self.assertIn("回合以不带工具调用的消息结束", orca)
         # 口径有歧义先问：worker 把推论当事实用，猜错一轮就是整轮返工（2026-11-17 实测）
         for prompt in (orca, foreman.worker_prompt({"foreman_name": "f", "base": "main",
                                                     "transport": "hcom"}, task, dispatch, brief)):

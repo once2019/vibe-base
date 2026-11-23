@@ -35,7 +35,7 @@ init 会把编排能力一起装进项目，形态是「文档 + 控制面脚本
 - 执行：`doctor` 体检（18 项）→ `init` → `task new` → `dispatch` → 结束回合；被唤醒后跑 `events` 收协议消息，其输出末尾会重申还在等人拍板的事项。
 - 前置：编排通道（hcom / Orca）属项目 AGENTS.md §4 的 Ask-first 事项，只提示安装，不自动装。
 - 可选质量门槛：`docs/governance/coding-discipline.md` 用 crapper / dryer / mutator 出机械证据，装在机器级 `~/tools/`，同属系统级依赖。不装按人工判据走，`doctor` 的 `quality-tools` 报 WARN 不报 FAIL。
-- 边界：本技能不参与运行期。项目初始化后删掉本技能，这套能力照旧可用，因为它是项目自持的文档与脚本。
+- 边界：本技能不参与运行期。项目初始化后删掉本技能，这套能力照旧可用：它是项目自持的文档与脚本。
 
 ## 安装
 
@@ -44,7 +44,7 @@ mkdir -p ~/.pi/agent/skills && cp -r skills/vibe-base ~/.pi/agent/skills/     # 
 mkdir -p ~/.codex/skills   && cp -r skills/vibe-base ~/.codex/skills/        # codex
 ```
 
-无第三方依赖（Python 3.9+ 标准库）。依赖与可选项见 README「四、依赖」，产出清单见「六、开始使用」。回归测试不在技能包内，由维护本技能的仓库跑 `python3 -m unittest discover -s tests`。
+无第三方依赖（Python 3.9+ 标准库）。依赖与可选项见 README「五、依赖」，产出清单见「二、开始使用」。回归测试不在技能包内，由维护本技能的仓库跑 `python3 -m unittest discover -s tests`。
 
 ## 红线
 
@@ -52,7 +52,3 @@ mkdir -p ~/.codex/skills   && cp -r skills/vibe-base ~/.codex/skills/        # c
 - `AGENTS.md` 唯一事实来源，不得在其他文档复述其规则。
 - 编排块默认不派工：init 只备骨架（`.vibe/` 目录、`config.json`、忽略规则），不装通道、不跑 doctor；判据看有没有在跑的任务，没有就不探测通道。
 - 编排块一旦启用，状态变更只经 `scripts/foreman.py`，不手工编辑 `.vibe/` 下的状态与证据。
-
-## Tradeoff
-
-占位符回填制牺牲"一次填完的完整性"换取冷启动零打断；存量信息丰富的项目可初始化时主动回填，豁免等待。其余代价（自持副本不随技能升级、多一个可能不用的脚本）见 README「三、理论支撑与取舍」的对照表。
