@@ -34,3 +34,4 @@
 - 2026-11-19｜技能库｜[主管侧缺陷重跑用 `--infra`，不占尝试配额](2026-11-19-infra-dispatch-not-counted.md)｜已生效｜30% 的重派是主管侧假 FAIL，却烧掉 worker 的尝试配额（T-027 三次用完差点误判该拆）；infra 不推进次数、blocked 仍走人类 unblock
 - 2026-11-19｜技能库｜[守卫的生命周期：准入 → 分档 → 举证 → 退出](2026-11-19-guard-lifecycle.md)｜已生效｜合并并取代归一边界与降级阶梯两条；四步各有可判定判据；退出靠对照实验「关掉它谁会发现」而非触发率；agent 可报告不得自行放宽（风格跟惯例、守卫要证据）
 - 2026-11-19｜技能库｜[技能包只发规范与原则，原因归决策记录](2026-11-19-skill-ships-norms-not-rationale.md)｜已生效｜规范文档只写做法与判据；论据/推导/历史过程归 decisions；tests/test_skill_docs.py 机械守卫
+- 2026-11-19｜编排｜[落在已收口或未知任务上的协议消息只记录，不阻塞队列](2026-11-19-noise-message-must-not-block-queue.md)｜已生效｜通道消费式，一条 fail 会让同批后面的 ASK/DONE 搁浅；噪声先落正文再 ignored；waiting_human→review 仍 fail

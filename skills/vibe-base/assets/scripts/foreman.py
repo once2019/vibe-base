@@ -2344,10 +2344,30 @@ def apply_protocol_event(repo: Repo, cfg: dict, event: dict) -> dict:
              f"一次只报一个 task/dispatch，引述他任务的消息要删掉协议头")
     parsed = cands[0]
     ptype, task_id, dispatch_id = parsed
-    task = repo.load_task(task_id)
     dref = f"{dispatch_id}（来自 {sender}）"
     result: dict = {"event_id": event.get("id"), "type": ptype, "task": task_id,
                     "dispatch": dispatch_id, "from": sender}
+    # 噪声不能堵队列：通道是消费式的，一条 fail 就让同批后面的 ASK/DONE 全部搁浅，
+    # 而主管看不到它们（只落 batch-unhandled.log）。落在未知任务或已收口任务上的消息
+    # 一律记一行、留原文、返回 ignored，继续处理后面的。
+    if not any((d / "task.json").exists() for d in (repo.tasks_dir / task_id,
+                                                    repo.archive_dir / task_id)):
+        raw = save_evidence(repo, "_unparsed",
+                            f"unknown-{safe_name(task_id)}-{now_iso().replace(':', '')}.md", text)
+        result.update(task_status="unknown",
+                      ignored=f"{ptype} 指向不存在的任务 {task_id}（{dref}）",
+                      evidence=str(raw),
+                      hint=f"多半是别的仓的任务号或协议头笔误；原文已留档 {raw}")
+        return result
+    task = repo.load_task(task_id)
+    if str(task.get("status")) in {"completed", "abandoned"}:
+        raw = save_evidence(repo, "_unparsed",
+                            f"late-{safe_name(task_id)}-{safe_name(dispatch_id)}.md", text)
+        result.update(task_status=task["status"],
+                      ignored=f"{ptype} 落在已 {task['status']} 的任务上（{dref}）",
+                      evidence=str(raw),
+                      hint="任务已收口，本条按噪声忽略；真要继续干就从新任务开始")
+        return result
     # 发送者不在本任务的派工记录里：名字撞线的残留信号（协议头仍是权威，只记不拦）。
     # Orca 通道的 from 是终端句柄（term_*）而非 dispatch id，那是正常的，不算异常。
     known = sorted({d.get("worker_handle") for d in task.get("dispatches", []) if d.get("worker_handle")})
@@ -2360,7 +2380,16 @@ def apply_protocol_event(repo: Repo, cfg: dict, event: dict) -> dict:
 
     if ptype == "ASK":
         # 证据先落盘：状态机一旦拒收，消息已从通道消费掉，没落盘就等于丢
-        save_evidence(repo, task_id, f"ask-{safe_name(dispatch_id)}.md", text)
+        ev = save_evidence(repo, task_id, f"ask-{safe_name(dispatch_id)}.md", text)
+        if task["status"] != "waiting_answer" and not can_transition(task["status"], "waiting_answer"):
+            # 交付之后还在提问的 worker 是旧会话：忽略而不是 fail，否则同批后面的消息全搁浅
+            repo.log_task(task, task["status"], f"{dref} 交付后仍提问，按噪声忽略（原文已存 {ev}）")
+            repo.save_task(task)
+            result.update(task_status=task["status"],
+                          ignored=f"ASK 落在 {task['status']} 的任务上（{dref}）",
+                          evidence=str(ev),
+                          hint="worker 已交付仍在提问，疑为旧会话；要它继续就 reply 后重新唤醒")
+            return result
         repo.set_status(task, "waiting_answer")
         entry = {"dispatch": dispatch_id, "from": sender, "at": now_iso(), "question": text}
         task.setdefault("asks", []).append(entry)
@@ -2597,6 +2626,8 @@ def cmd_events(args: argparse.Namespace) -> int:
     result["pending_human"] = pending_human_decisions(repo)
     emit(args, result,
          f"[{result['type']}] {result['task']}/{result['dispatch']} 来自 {result['from']} → 任务状态 {result['task_status']}"
+         + (f"\n已忽略：{result['ignored']}（原文 {result['evidence']}）"
+            if result.get("ignored") else "")
          + (f"\n建议：{result['hint']}" if result.get("hint") else "")
          + (f"\n注意：消息来自 {result['from']}，不在本任务派工记录（"
             f"{', '.join(result['sender_unexpected'])}）里：疑跨仓串线，核对协议头 task/dispatch"
