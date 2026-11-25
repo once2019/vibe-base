@@ -343,8 +343,10 @@ class TestInitAndTask(TempGitRepoMixin):
         # 容忍模型输出形态的成本必须留在归一层：消费点各自猜形状是不可逆的沉积
         self.assertIn("外部输入的形态判断只许在归一层", brief)
         # 默认服从会把无用守卫复制成范本：可以报告，不得自行放宽或就地绕
-        self.assertIn("不许自行放宽或就地", brief)
-        self.assertIn("放宽由主管裁决", brief)
+        # 门失败先判影响面，不许默认停工：停下来等裁决是任务卡死的常见死法
+        self.assertIn("三问全否就记一行偏差后继续", brief)
+        self.assertIn("会改变下游产物吗", brief)
+        self.assertIn("安全、数据破坏、不可逆动作不受三问保护", brief)
         self.assertIn("反证一次", brief)
         self.assertIn("仍然全绿，说明缺测试", brief)
         # 大改动必须跑质量工具，否则「装了工具却手搓」没有约束（2026-11-19 实测 doctor 只判存在）
