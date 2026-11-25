@@ -348,7 +348,15 @@ class TestInitAndTask(TempGitRepoMixin):
         self.assertIn("会改变下游产物吗", brief)
         self.assertIn("安全、数据破坏、不可逆动作不受三问保护", brief)
         self.assertIn("反证一次", brief)
-        self.assertIn("仍然全绿，说明缺测试", brief)
+        # 反证按逻辑改动分级：纯文档/文案不跑，但要写明豁免；拿不准仍要做
+        self.assertIn("仍全绿说明缺测试", brief)
+        self.assertIn("反证一次（改了逻辑才做）", brief)
+        self.assertIn("注释的改动免做", brief)
+        self.assertIn("无逻辑改动，反证豁免", brief)
+        self.assertIn("拿不准就做", brief)
+        # 完成定义是目标达成 + 偏差留痕，验收命令只是主要证据
+        self.assertIn("目标达成 + 已知偏差留痕就算完成", brief)
+        self.assertIn("带遗留项交付是正常完成", brief)
         # 大改动必须跑质量工具，否则「装了工具却手搓」没有约束（2026-11-19 实测 doctor 只判存在）
         self.assertIn("第四步：大改动跑质量工具", brief)
         self.assertIn("--numstat", brief)

@@ -36,3 +36,4 @@
 - 2026-11-19｜技能库｜[技能包只发规范与原则，原因归决策记录](2026-11-19-skill-ships-norms-not-rationale.md)｜已生效｜规范文档只写做法与判据；论据/推导/历史过程归 decisions；tests/test_skill_docs.py 机械守卫
 - 2026-11-19｜编排｜[落在已收口或未知任务上的协议消息只记录，不阻塞队列](2026-11-19-noise-message-must-not-block-queue.md)｜已生效｜通道消费式，一条 fail 会让同批后面的 ASK/DONE 搁浅；噪声先落正文再 ignored；waiting_human→review 仍 fail
 - 2026-11-19｜技能库｜[门失败不等于任务失败：三问放行 + 准入加泛用性](2026-11-19-gate-failure-is-not-task-failure.md)｜已生效｜影响面三问全否即记录偏差继续；举证改「记录后继续」；准入第四问问泛用性
+- 2026-11-19｜技能库｜[自审随改动分级，完成定义按目标达成](2026-11-19-review-effort-scales-with-logic.md)｜已生效｜反证只对逻辑改动；完成 = 目标达成 + 偏差留痕，遗留项带痕交付算正常完成
